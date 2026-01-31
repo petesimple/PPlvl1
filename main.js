@@ -38,15 +38,19 @@ let mult = 1;
 // --------------------
 const TABLE_INSET = 22;
 
-// Flippers
+// Flippers (tuned to your background)
 const FLIPPER_Y = WORLD_H - 190;
 const FLIPPER_OFFSET_X = 88;
 const FLIPPER_LEN = 78;
 
-// Bottom: block outlanes, only allow center drain
-const BOTTOM_WALL_Y = WORLD_H - TABLE_INSET;
-const DRAIN_OPEN_W = 150;
-const DRAIN_TRIGGER_Y = WORLD_H - 90;
+// Bottom and drain
+const BOTTOM_WALL_Y = WORLD_H - TABLE_INSET; // solid bottom wall line
+const DRAIN_OPEN_W = 150;                    // only open drain width in the middle
+const DRAIN_TRIGGER_Y = WORLD_H - 90;        // must be this low to count as a drain
+
+// Outlane blockers: prevents puck from slipping down around flippers
+const OUTLANE_Y_TOP = FLIPPER_Y - 20;
+const OUTLANE_Y_BOTTOM = BOTTOM_WALL_Y - 10;
 
 // Plunger lane (right side)
 const LANE_W = 68;
@@ -60,7 +64,7 @@ const table = {
   goal: { x: WORLD_W / 2, y: 170, w: 170, h: 18 },
 };
 
-// Bumpers near the big buttons
+// Bumpers near the big buttons (simple)
 const bumpers = [
   { x: 120, y: 270, r: 22 }, // BANK
   { x: 360, y: 270, r: 22 }, // MULTIPLIER
@@ -128,7 +132,6 @@ function resetGame() {
 }
 
 function launchPuckKeyboard() {
-  // Keyboard launch: fixed strength, starts in lane
   if (!puck.stuck) return;
   puck.stuck = false;
   puck.mode = "plunger";
@@ -139,12 +142,11 @@ function launchPuckKeyboard() {
 }
 
 btnLaunch.addEventListener("click", () => {
-  // Button acts like the keyboard launch
   launchPuckKeyboard();
 });
 btnReset.addEventListener("click", resetGame);
 
-// Keyboard
+// Keyboard controls
 window.addEventListener("keydown", (e) => {
   const k = e.key.toLowerCase();
   if (k === " ") { input.launch = true; e.preventDefault(); }
@@ -163,7 +165,7 @@ window.addEventListener("keyup", (e) => {
   if (k === flippers.right.key) flippers.right.pressed = false;
 });
 
-// Screen -> world
+// Screen to world
 function screenToWorld(clientX, clientY) {
   const rect = canvas.getBoundingClientRect();
   const x = (clientX - rect.left) * (canvas.width / rect.width);
@@ -218,7 +220,7 @@ canvas.addEventListener("pointerdown", (e) => {
   touchStartY = p.y;
   touchStartTime = performance.now();
 
-  // Bottom flipper holds
+  // Bottom flippers
   if (isLeftBottom(p)) {
     flippers.left.pressed = true;
     return;
@@ -228,7 +230,7 @@ canvas.addEventListener("pointerdown", (e) => {
     return;
   }
 
-  // Plunger pull (only if puck is waiting in lane)
+  // Plunger pull only when puck is waiting, and touch starts in lane area
   if ((puck.mode === "plunger_ready" || puck.mode === "plunger") && isInPlungerLane(p)) {
     plungerActive = true;
     plungerPull = 0;
@@ -241,13 +243,13 @@ canvas.addEventListener("pointermove", (e) => {
 
   const p = screenToWorld(e.clientX, e.clientY);
 
-  // If finger is in bottom zone, update which flipper is held
+  // Move between bottom zones switches which flipper is held
   if (isInBottomZone(p)) {
     flippers.left.pressed = isLeftBottom(p);
     flippers.right.pressed = isRightBottom(p);
   }
 
-  // Plunger pull: drag down increases pull
+  // Plunger pull
   if (plungerActive) {
     const pullPx = Math.max(0, p.y - touchStartY);
     setPlungerPull(pullPx);
@@ -266,7 +268,7 @@ canvas.addEventListener("pointerup", (e) => {
   flippers.left.pressed = false;
   flippers.right.pressed = false;
 
-  // Plunger release -> launch strength
+  // Plunger release launches with strength
   if (plungerActive) {
     plungerActive = false;
 
@@ -287,7 +289,7 @@ canvas.addEventListener("pointerup", (e) => {
     return;
   }
 
-  // Tilt swipe: quick left/right (outside bottom zone)
+  // Tilt swipe: quick left/right outside bottom zone
   if (!isInBottomZone(p) &&
       dt <= SWIPE_MAX_TIME &&
       Math.abs(totalDx) >= SWIPE_MIN_PX &&
@@ -323,6 +325,17 @@ function step(now) {
   update(dt);
   draw();
   requestAnimationFrame(step);
+}
+
+function collideWithVerticalWall(x, yTop, yBottom) {
+  // Only active when puck is within the vertical span
+  if (puck.y + puck.r < yTop || puck.y - puck.r > yBottom) return;
+
+  const dx = puck.x - x;
+  if (Math.abs(dx) < puck.r) {
+    puck.x = x + Math.sign(dx || 1) * puck.r;
+    puck.vx = -puck.vx * REST;
+  }
 }
 
 function update(dt) {
@@ -368,23 +381,27 @@ function update(dt) {
 
   // Mode-specific walls
   if (puck.mode === "plunger" || puck.mode === "plunger_ready") {
-    // keep puck inside plunger lane
+    // Keep puck in lane
     if (puck.x - puck.r < LANE_X1) { puck.x = LANE_X1 + puck.r; puck.vx = -puck.vx * REST; }
     if (puck.x + puck.r > LANE_X2) { puck.x = LANE_X2 - puck.r; puck.vx = -puck.vx * REST; }
 
-    // release into play once it reaches the exit
+    // Release into play once it reaches exit
     if (puck.y < LANE_RELEASE_Y) {
       puck.mode = "play";
-      puck.vx = -260 + rand(-40, 40);       // kick left into the table
-      puck.vy = Math.min(puck.vy, -300);    // keep it moving upward
+      puck.vx = -260 + rand(-40, 40);
+      puck.vy = Math.min(puck.vy, -300);
     }
   } else {
-    // normal side walls
+    // Normal side walls
     const L = table.inset;
     const R = WORLD_W - table.inset;
     if (puck.x - puck.r < L) { puck.x = L + puck.r; puck.vx = -puck.vx * REST; }
     if (puck.x + puck.r > R) { puck.x = R - puck.r; puck.vx = -puck.vx * REST; }
   }
+
+  // Outlane blockers (prevents side drains around flippers)
+  collideWithVerticalWall(table.inset + 4, OUTLANE_Y_TOP, OUTLANE_Y_BOTTOM);
+  collideWithVerticalWall(WORLD_W - table.inset - 4, OUTLANE_Y_TOP, OUTLANE_Y_BOTTOM);
 
   // Bottom behavior: block outlanes, only center drain is open
   if (puck.y + puck.r > BOTTOM_WALL_Y) {
@@ -401,7 +418,7 @@ function update(dt) {
       return;
     }
 
-    // bounce off bottom wall
+    // Bounce off bottom wall
     puck.y = BOTTOM_WALL_Y - puck.r;
     puck.vy = -Math.abs(puck.vy) * REST;
   }
@@ -419,9 +436,11 @@ function update(dt) {
         const nx = dx / d;
         const ny = dy / d;
 
+        // push out
         puck.x = b.x + nx * rr;
         puck.y = b.y + ny * rr;
 
+        // reflect
         const vn = puck.vx * nx + puck.vy * ny;
         puck.vx -= 2 * vn * nx;
         puck.vy -= 2 * vn * ny;
@@ -532,7 +551,7 @@ function draw() {
 
   if (bgReady) ctx.drawImage(BG, 0, 0, WORLD_W, WORLD_H);
 
-  // Plunger pull indicator (helps a lot on mobile)
+  // Plunger pull indicator (helps on mobile)
   if (plungerActive) {
     const barH = 90;
     const barW = 10;
