@@ -1,78 +1,73 @@
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 
-// Fixed world size for physics and layout
+// =====================
+// WORLD SETUP
+// =====================
 const WORLD_W = 480;
 const WORLD_H = 800;
 
 let scaleX = 1;
 let scaleY = 1;
-let dpr = Math.max(1, window.devicePixelRatio || 1);
 
-// HUD
-const elScore = document.getElementById("score");
-const elMult  = document.getElementById("mult");
-const elBanks = document.getElementById("banks");
+function resizeCanvas() {
+  const rect = canvas.getBoundingClientRect();
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  scaleX = canvas.width / WORLD_W;
+  scaleY = canvas.height / WORLD_H;
+}
 
-const btnLaunch = document.getElementById("btnLaunch");
-const btnReset  = document.getElementById("btnReset");
+window.addEventListener("resize", resizeCanvas);
+resizeCanvas();
 
-// Background
+// =====================
+// BACKGROUND
+// =====================
 const BG = new Image();
 BG.src = "bg-level1.png";
 let bgReady = false;
-BG.onload = () => { bgReady = true; };
+BG.onload = () => (bgReady = true);
 
-// Helpers
+// =====================
+// HELPERS
+// =====================
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const len2 = (x, y) => x * x + y * y;
 const rand = (a, b) => a + Math.random() * (b - a);
 
-// Score state
-let score = 0;
-let bankHits = 0;
-let mult = 1;
-
-// --------------------
-// Calibration knobs
-// --------------------
+// =====================
+// CALIBRATION
+// =====================
 const TABLE_INSET = 22;
 
-// Flippers (tuned to your background)
+// Flippers
 const FLIPPER_Y = WORLD_H - 190;
 const FLIPPER_OFFSET_X = 88;
 const FLIPPER_LEN = 78;
 
-// Bottom and drain
-const BOTTOM_WALL_Y = WORLD_H - TABLE_INSET; // solid bottom wall line
-const DRAIN_OPEN_W = 150;                    // only open drain width in the middle
-const DRAIN_TRIGGER_Y = WORLD_H - 90;        // must be this low to count as a drain
+// Bottom + drain
+const BOTTOM_WALL_Y = WORLD_H - TABLE_INSET;
+const DRAIN_OPEN_W = 150;
+const DRAIN_TRIGGER_Y = WORLD_H - 90;
 
-// Outlane blockers: prevents puck from slipping down around flippers
-const OUTLANE_Y_TOP = FLIPPER_Y - 20;
-const OUTLANE_Y_BOTTOM = BOTTOM_WALL_Y - 10;
+// OUTLANE BLOCKERS (REAL WALLS)
+const OUTLANE_Y_TOP = FLIPPER_Y - 40;
+const OUTLANE_Y_BOTTOM = BOTTOM_WALL_Y;
 
-// Plunger lane (right side)
+// Plunger lane
 const LANE_W = 68;
 const LANE_X2 = WORLD_W - TABLE_INSET;
 const LANE_X1 = LANE_X2 - LANE_W;
 const LANE_RELEASE_Y = 505;
 const PLUNGER_START_Y = WORLD_H - 120;
 
-const table = {
-  inset: TABLE_INSET,
-  goal: { x: WORLD_W / 2, y: 170, w: 170, h: 18 },
-};
-
-// Bumpers near the big buttons (simple)
-const bumpers = [
-  { x: 120, y: 270, r: 22 }, // BANK
-  { x: 360, y: 270, r: 22 }, // MULTIPLIER
-];
-
+// =====================
+// GAME OBJECTS
+// =====================
 const puck = {
   x: WORLD_W / 2,
-  y: WORLD_H - 130,
+  y: PLUNGER_START_Y,
   r: 12,
   vx: 0,
   vy: 0,
@@ -80,13 +75,12 @@ const puck = {
   mode: "plunger_ready", // plunger_ready | plunger | play
 };
 
-// Flippers rest down, flip up on press
 const flippers = {
   left: {
     pivot: { x: WORLD_W / 2 - FLIPPER_OFFSET_X, y: FLIPPER_Y },
     len: FLIPPER_LEN,
-    baseAngle: 0.55,
-    hitAngle: -0.55,
+    base: 0.55,
+    hit: -0.55,
     angle: 0.55,
     pressed: false,
     key: "a",
@@ -94,433 +88,117 @@ const flippers = {
   right: {
     pivot: { x: WORLD_W / 2 + FLIPPER_OFFSET_X, y: FLIPPER_Y },
     len: FLIPPER_LEN,
-    baseAngle: Math.PI - 0.55,
-    hitAngle: Math.PI + 0.55,
+    base: Math.PI - 0.55,
+    hit: Math.PI + 0.55,
     angle: Math.PI - 0.55,
     pressed: false,
     key: "l",
-  }
+  },
 };
 
-const input = {
-  launch: false,
-  nudgeL: false,
-  nudgeR: false,
-};
+// =====================
+// INPUT
+// =====================
+let input = { launch: false };
 
-function setHUD() {
-  elScore.textContent = String(score);
-  elMult.textContent = `x${mult}`;
-  elBanks.textContent = String(bankHits);
-}
+window.addEventListener("keydown", (e) => {
+  const k = e.key.toLowerCase();
+  if (k === " ") input.launch = true;
+  if (k === "a") flippers.left.pressed = true;
+  if (k === "l") flippers.right.pressed = true;
+});
 
+window.addEventListener("keyup", (e) => {
+  const k = e.key.toLowerCase();
+  if (k === " ") input.launch = false;
+  if (k === "a") flippers.left.pressed = false;
+  if (k === "l") flippers.right.pressed = false;
+});
+
+// =====================
+// PHYSICS CONSTANTS
+// =====================
+const GRAV = 760;
+const AIR = 0.995;
+const REST = 0.88;
+
+// =====================
+// CORE FUNCTIONS
+// =====================
 function resetToPlunger() {
   puck.stuck = true;
   puck.mode = "plunger_ready";
   puck.x = (LANE_X1 + LANE_X2) / 2;
   puck.y = PLUNGER_START_Y;
-  puck.vx = 0;
-  puck.vy = 0;
+  puck.vx = puck.vy = 0;
 }
 
-function resetGame() {
-  score = 0;
-  bankHits = 0;
-  mult = 1;
-  resetToPlunger();
-  setHUD();
-}
-
-function launchPuckKeyboard() {
+function launchPuck() {
   if (!puck.stuck) return;
   puck.stuck = false;
   puck.mode = "plunger";
   puck.x = (LANE_X1 + LANE_X2) / 2;
   puck.y = PLUNGER_START_Y;
   puck.vx = 0;
-  puck.vy = -820;
+  puck.vy = -850;
 }
 
-btnLaunch.addEventListener("click", () => {
-  launchPuckKeyboard();
-});
-btnReset.addEventListener("click", resetGame);
+// =====================
+// COLLISIONS
+// =====================
+function collideOutlane(sideX, side) {
+  if (puck.y + puck.r < OUTLANE_Y_TOP || puck.y - puck.r > OUTLANE_Y_BOTTOM) return;
 
-// Keyboard controls
-window.addEventListener("keydown", (e) => {
-  const k = e.key.toLowerCase();
-  if (k === " ") { input.launch = true; e.preventDefault(); }
-  if (k === "q") input.nudgeL = true;
-  if (k === "p") input.nudgeR = true;
-  if (k === flippers.left.key) flippers.left.pressed = true;
-  if (k === flippers.right.key) flippers.right.pressed = true;
-});
-
-window.addEventListener("keyup", (e) => {
-  const k = e.key.toLowerCase();
-  if (k === " ") input.launch = false;
-  if (k === "q") input.nudgeL = false;
-  if (k === "p") input.nudgeR = false;
-  if (k === flippers.left.key) flippers.left.pressed = false;
-  if (k === flippers.right.key) flippers.right.pressed = false;
-});
-
-// Screen to world
-function screenToWorld(clientX, clientY) {
-  const rect = canvas.getBoundingClientRect();
-  const x = (clientX - rect.left) * (canvas.width / rect.width);
-  const y = (clientY - rect.top)  * (canvas.height / rect.height);
-  return { x: x / scaleX, y: y / scaleY };
-}
-
-// --------------------
-// Mobile gesture controls
-// --------------------
-let touchId = null;
-let touchStartX = 0;
-let touchStartY = 0;
-let touchStartTime = 0;
-
-let plungerActive = false;
-let plungerPull = 0; // 0..1
-const PLUNGER_MAX_PULL_PX = 180;
-
-const FLIPPER_ZONE_H = 0.28; // bottom 28% is flipper zone
-const SWIPE_MIN_PX = 55;
-const SWIPE_MAX_TIME = 280; // ms
-const TILT_STRENGTH = 220;
-
-function isInBottomZone(p) {
-  return p.y > WORLD_H * (1 - FLIPPER_ZONE_H);
-}
-function isLeftBottom(p) {
-  return isInBottomZone(p) && (p.x < WORLD_W * 0.5);
-}
-function isRightBottom(p) {
-  return isInBottomZone(p) && (p.x >= WORLD_W * 0.5);
-}
-function isInPlungerLane(p) {
-  return (p.x >= LANE_X1 - 10 && p.x <= LANE_X2 + 10);
-}
-function applyTilt(dir) {
-  if (puck.mode !== "play" || puck.stuck) return;
-  puck.vx += dir * TILT_STRENGTH;
-}
-function setPlungerPull(pullPx) {
-  plungerPull = clamp(pullPx / PLUNGER_MAX_PULL_PX, 0, 1);
-}
-
-canvas.addEventListener("pointerdown", (e) => {
-  if (touchId !== null) return; // single-touch simple mode
-  touchId = e.pointerId;
-  canvas.setPointerCapture(e.pointerId);
-
-  const p = screenToWorld(e.clientX, e.clientY);
-  touchStartX = p.x;
-  touchStartY = p.y;
-  touchStartTime = performance.now();
-
-  // Bottom flippers
-  if (isLeftBottom(p)) {
-    flippers.left.pressed = true;
-    return;
-  }
-  if (isRightBottom(p)) {
-    flippers.right.pressed = true;
-    return;
-  }
-
-  // Plunger pull only when puck is waiting, and touch starts in lane area
-  if ((puck.mode === "plunger_ready" || puck.mode === "plunger") && isInPlungerLane(p)) {
-    plungerActive = true;
-    plungerPull = 0;
-    return;
-  }
-});
-
-canvas.addEventListener("pointermove", (e) => {
-  if (touchId !== e.pointerId) return;
-
-  const p = screenToWorld(e.clientX, e.clientY);
-
-  // Move between bottom zones switches which flipper is held
-  if (isInBottomZone(p)) {
-    flippers.left.pressed = isLeftBottom(p);
-    flippers.right.pressed = isRightBottom(p);
-  }
-
-  // Plunger pull
-  if (plungerActive) {
-    const pullPx = Math.max(0, p.y - touchStartY);
-    setPlungerPull(pullPx);
-  }
-});
-
-canvas.addEventListener("pointerup", (e) => {
-  if (touchId !== e.pointerId) return;
-
-  const p = screenToWorld(e.clientX, e.clientY);
-  const dt = performance.now() - touchStartTime;
-  const totalDx = p.x - touchStartX;
-  const totalDy = p.y - touchStartY;
-
-  // Release flippers
-  flippers.left.pressed = false;
-  flippers.right.pressed = false;
-
-  // Plunger release launches with strength
-  if (plungerActive) {
-    plungerActive = false;
-
-    if (plungerPull > 0.05) {
-      puck.stuck = false;
-      puck.mode = "plunger";
-      puck.x = (LANE_X1 + LANE_X2) / 2;
-      puck.y = PLUNGER_START_Y;
-
-      const minV = -420;
-      const maxV = -980;
-      puck.vx = 0;
-      puck.vy = minV + (maxV - minV) * plungerPull;
-    }
-
-    plungerPull = 0;
-    touchId = null;
-    return;
-  }
-
-  // Tilt swipe: quick left/right outside bottom zone
-  if (!isInBottomZone(p) &&
-      dt <= SWIPE_MAX_TIME &&
-      Math.abs(totalDx) >= SWIPE_MIN_PX &&
-      Math.abs(totalDy) < SWIPE_MIN_PX) {
-    applyTilt(totalDx > 0 ? +1 : -1);
-  }
-
-  touchId = null;
-});
-
-canvas.addEventListener("pointercancel", (e) => {
-  if (touchId !== e.pointerId) return;
-  flippers.left.pressed = false;
-  flippers.right.pressed = false;
-  plungerActive = false;
-  plungerPull = 0;
-  touchId = null;
-});
-
-// --------------------
-// Physics
-// --------------------
-const GRAV = 760;
-const AIR  = 0.995;
-const REST = 0.88;
-const MAXS = 1500;
-
-let last = performance.now();
-
-function step(now) {
-  const dt = Math.min(0.02, (now - last) / 1000);
-  last = now;
-  update(dt);
-  draw();
-  requestAnimationFrame(step);
-}
-
-function collideWithVerticalWall(x, yTop, yBottom) {
-  // Only active when puck is within the vertical span
-  if (puck.y + puck.r < yTop || puck.y - puck.r > yBottom) return;
-
-  const dx = puck.x - x;
-  if (Math.abs(dx) < puck.r) {
-    puck.x = x + Math.sign(dx || 1) * puck.r;
-    puck.vx = -puck.vx * REST;
-  }
-}
-
-function update(dt) {
-  if (input.launch) {
-    launchPuckKeyboard();
-    input.launch = false;
-  }
-
-  // Flipper animation
-  for (const f of [flippers.left, flippers.right]) {
-    const target = f.pressed ? f.hitAngle : f.baseAngle;
-    const speed  = f.pressed ? 34 : 18;
-    f.angle += clamp(target - f.angle, -speed * dt, speed * dt);
-  }
-
-  if (puck.stuck) return;
-
-  // Nudges only during play
-  if (puck.mode === "play") {
-    if (input.nudgeL) puck.vx -= 130 * dt;
-    if (input.nudgeR) puck.vx += 130 * dt;
-  }
-
-  // Integrate
-  puck.vy += GRAV * dt;
-  puck.x  += puck.vx * dt;
-  puck.y  += puck.vy * dt;
-
-  // Damping
-  puck.vx *= AIR;
-  puck.vy *= AIR;
-
-  // Clamp
-  puck.vx = clamp(puck.vx, -MAXS, MAXS);
-  puck.vy = clamp(puck.vy, -MAXS, MAXS);
-
-  // Top wall
-  const T = table.inset;
-  if (puck.y - puck.r < T) {
-    puck.y = T + puck.r;
-    puck.vy = -puck.vy * REST;
-  }
-
-  // Mode-specific walls
-  if (puck.mode === "plunger" || puck.mode === "plunger_ready") {
-    // Keep puck in lane
-    if (puck.x - puck.r < LANE_X1) { puck.x = LANE_X1 + puck.r; puck.vx = -puck.vx * REST; }
-    if (puck.x + puck.r > LANE_X2) { puck.x = LANE_X2 - puck.r; puck.vx = -puck.vx * REST; }
-
-    // Release into play once it reaches exit
-    if (puck.y < LANE_RELEASE_Y) {
-      puck.mode = "play";
-      puck.vx = -260 + rand(-40, 40);
-      puck.vy = Math.min(puck.vy, -300);
+  if (side === "left") {
+    if (puck.x - puck.r < sideX) {
+      puck.x = sideX + puck.r;
+      puck.vx = Math.abs(puck.vx) * REST;
     }
   } else {
-    // Normal side walls
-    const L = table.inset;
-    const R = WORLD_W - table.inset;
-    if (puck.x - puck.r < L) { puck.x = L + puck.r; puck.vx = -puck.vx * REST; }
-    if (puck.x + puck.r > R) { puck.x = R - puck.r; puck.vx = -puck.vx * REST; }
-  }
-
-  // Outlane blockers (prevents side drains around flippers)
-  collideWithVerticalWall(table.inset + 4, OUTLANE_Y_TOP, OUTLANE_Y_BOTTOM);
-  collideWithVerticalWall(WORLD_W - table.inset - 4, OUTLANE_Y_TOP, OUTLANE_Y_BOTTOM);
-
-  // Bottom behavior: block outlanes, only center drain is open
-  if (puck.y + puck.r > BOTTOM_WALL_Y) {
-    const drainX1 = (WORLD_W / 2) - (DRAIN_OPEN_W / 2);
-    const drainX2 = (WORLD_W / 2) + (DRAIN_OPEN_W / 2);
-    const inDrainOpening = (puck.x > drainX1 && puck.x < drainX2);
-
-    if (inDrainOpening && puck.y > DRAIN_TRIGGER_Y) {
-      score -= 500;
-      bankHits = Math.max(0, bankHits - 2);
-      mult = bankHits >= 7 ? 8 : bankHits >= 4 ? 4 : bankHits >= 2 ? 2 : 1;
-      setHUD();
-      resetToPlunger();
-      return;
+    if (puck.x + puck.r > sideX) {
+      puck.x = sideX - puck.r;
+      puck.vx = -Math.abs(puck.vx) * REST;
     }
-
-    // Bounce off bottom wall
-    puck.y = BOTTOM_WALL_Y - puck.r;
-    puck.vy = -Math.abs(puck.vy) * REST;
-  }
-
-  // Collisions only during play
-  if (puck.mode === "play") {
-    // bumpers
-    for (const b of bumpers) {
-      const dx = puck.x - b.x;
-      const dy = puck.y - b.y;
-      const rr = puck.r + b.r;
-
-      if (len2(dx, dy) < rr * rr) {
-        const d = Math.max(0.001, Math.hypot(dx, dy));
-        const nx = dx / d;
-        const ny = dy / d;
-
-        // push out
-        puck.x = b.x + nx * rr;
-        puck.y = b.y + ny * rr;
-
-        // reflect
-        const vn = puck.vx * nx + puck.vy * ny;
-        puck.vx -= 2 * vn * nx;
-        puck.vy -= 2 * vn * ny;
-
-        puck.vx *= REST;
-        puck.vy *= REST;
-
-        bankHits += 1;
-        mult = bankHits >= 7 ? 8 : bankHits >= 4 ? 4 : bankHits >= 2 ? 2 : 1;
-        score += 150 * mult;
-        setHUD();
-      }
-    }
-
-    // goal band
-    const g = table.goal;
-    if (
-      puck.x > g.x - g.w / 2 && puck.x < g.x + g.w / 2 &&
-      puck.y + puck.r > g.y && puck.y - puck.r < g.y + g.h &&
-      puck.vy > 0
-    ) {
-      puck.vy = -Math.abs(puck.vy) * 0.92;
-      score += 1000 * mult;
-      puck.vx += rand(-40, 40);
-      setHUD();
-    }
-
-    // flippers
-    collideWithFlipper(flippers.left);
-    collideWithFlipper(flippers.right);
   }
 }
 
 function flipperEndpoints(f) {
-  const x1 = f.pivot.x;
-  const y1 = f.pivot.y;
-  const x2 = x1 + Math.cos(f.angle) * f.len;
-  const y2 = y1 + Math.sin(f.angle) * f.len;
-  return { x1, y1, x2, y2 };
+  return {
+    x1: f.pivot.x,
+    y1: f.pivot.y,
+    x2: f.pivot.x + Math.cos(f.angle) * f.len,
+    y2: f.pivot.y + Math.sin(f.angle) * f.len,
+  };
 }
 
 function collideWithFlipper(f) {
   const { x1, y1, x2, y2 } = flipperEndpoints(f);
-
   const vx = x2 - x1;
   const vy = y2 - y1;
   const wx = puck.x - x1;
   const wy = puck.y - y1;
-
-  const segLen2 = vx * vx + vy * vy;
-  const t = segLen2 > 0 ? clamp((wx * vx + wy * vy) / segLen2, 0, 1) : 0;
-
-  const cx = x1 + t * vx;
-  const cy = y1 + t * vy;
+  const t = clamp((wx * vx + wy * vy) / (vx * vx + vy * vy), 0, 1);
+  const cx = x1 + vx * t;
+  const cy = y1 + vy * t;
 
   const dx = puck.x - cx;
   const dy = puck.y - cy;
-  const dist2 = dx * dx + dy * dy;
-
+  const dist = Math.hypot(dx, dy);
   const hitR = puck.r + 9;
-  if (dist2 < hitR * hitR) {
-    const d = Math.max(0.001, Math.sqrt(dist2));
-    const nx = dx / d;
-    const ny = dy / d;
 
-    // separate
+  if (dist < hitR) {
+    const nx = dx / dist;
+    const ny = dy / dist;
     puck.x = cx + nx * hitR;
     puck.y = cy + ny * hitR;
 
-    // reflect
     const vn = puck.vx * nx + puck.vy * ny;
     puck.vx -= 2 * vn * nx;
     puck.vy -= 2 * vn * ny;
 
-    // strike boost
     if (f.pressed) {
       puck.vx += nx * 520;
       puck.vy += ny * 520;
-      score += 40 * mult;
-      setHUD();
     }
 
     puck.vx *= REST;
@@ -528,81 +206,111 @@ function collideWithFlipper(f) {
   }
 }
 
-// Responsive canvas
-function resizeCanvas() {
-  dpr = Math.max(1, window.devicePixelRatio || 1);
-  const rect = canvas.getBoundingClientRect();
+// =====================
+// GAME LOOP
+// =====================
+let last = performance.now();
 
-  canvas.width  = Math.max(1, Math.floor(rect.width  * dpr));
-  canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+function update(dt) {
+  if (input.launch) {
+    launchPuck();
+    input.launch = false;
+  }
 
-  scaleX = canvas.width / WORLD_W;
-  scaleY = canvas.height / WORLD_H;
+  // Flippers
+  for (const f of [flippers.left, flippers.right]) {
+    const target = f.pressed ? f.hit : f.base;
+    const speed = f.pressed ? 34 : 18;
+    f.angle += clamp(target - f.angle, -speed * dt, speed * dt);
+  }
+
+  if (puck.stuck) return;
+
+  puck.vy += GRAV * dt;
+  puck.x += puck.vx * dt;
+  puck.y += puck.vy * dt;
+
+  puck.vx *= AIR;
+  puck.vy *= AIR;
+
+  // Top wall
+  if (puck.y - puck.r < TABLE_INSET) {
+    puck.y = TABLE_INSET + puck.r;
+    puck.vy = -puck.vy * REST;
+  }
+
+  // Plunger lane walls
+  if (puck.mode !== "play") {
+    if (puck.x - puck.r < LANE_X1) puck.x = LANE_X1 + puck.r;
+    if (puck.x + puck.r > LANE_X2) puck.x = LANE_X2 - puck.r;
+    if (puck.y < LANE_RELEASE_Y) {
+      puck.mode = "play";
+      puck.vx = -260 + rand(-40, 40);
+    }
+  } else {
+    // Side walls
+    if (puck.x - puck.r < TABLE_INSET) puck.x = TABLE_INSET + puck.r;
+    if (puck.x + puck.r > WORLD_W - TABLE_INSET) puck.x = WORLD_W - TABLE_INSET - puck.r;
+  }
+
+  // OUTLANE WALLS (THIS IS THE IMPORTANT FIX)
+  collideOutlane(TABLE_INSET + 6, "left");
+  collideOutlane(WORLD_W - TABLE_INSET - 6, "right");
+
+  // Bottom drain
+  if (puck.y + puck.r > BOTTOM_WALL_Y) {
+    const dx = puck.x - WORLD_W / 2;
+    if (Math.abs(dx) < DRAIN_OPEN_W / 2 && puck.y > DRAIN_TRIGGER_Y) {
+      resetToPlunger();
+      return;
+    }
+    puck.y = BOTTOM_WALL_Y - puck.r;
+    puck.vy = -Math.abs(puck.vy) * REST;
+  }
+
+  // Flippers
+  if (puck.mode === "play") {
+    collideWithFlipper(flippers.left);
+    collideWithFlipper(flippers.right);
+  }
 }
-
-window.addEventListener("resize", resizeCanvas);
 
 function draw() {
   resizeCanvas();
-
-  // Draw world scaled into pixel canvas
   ctx.setTransform(scaleX, 0, 0, scaleY, 0, 0);
   ctx.clearRect(0, 0, WORLD_W, WORLD_H);
 
   if (bgReady) ctx.drawImage(BG, 0, 0, WORLD_W, WORLD_H);
 
-  // Plunger pull indicator (helps on mobile)
-  if (plungerActive) {
-    const barH = 90;
-    const barW = 10;
-    const x = LANE_X2 - 18;
-    const y = WORLD_H - 140;
-
-    ctx.save();
-    ctx.fillStyle = "rgba(255,255,255,0.12)";
-    ctx.fillRect(x, y - barH, barW, barH);
-    ctx.fillStyle = "rgba(79,163,255,0.85)";
-    ctx.fillRect(x, y - barH * plungerPull, barW, barH * plungerPull);
-    ctx.restore();
-  }
-
   // Flippers
-  drawFlipper(flippers.left);
-  drawFlipper(flippers.right);
+  for (const f of [flippers.left, flippers.right]) {
+    const e = flipperEndpoints(f);
+    ctx.lineWidth = 18;
+    ctx.lineCap = "round";
+    ctx.strokeStyle = f.pressed ? "#6cf" : "#39f";
+    ctx.beginPath();
+    ctx.moveTo(e.x1, e.y1);
+    ctx.lineTo(e.x2, e.y2);
+    ctx.stroke();
+  }
 
   // Puck
   ctx.beginPath();
   ctx.arc(puck.x, puck.y, puck.r, 0, Math.PI * 2);
-  ctx.fillStyle = "rgba(232,241,255,0.95)";
+  ctx.fillStyle = "#eef";
   ctx.fill();
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = "rgba(0,0,0,0.25)";
-  ctx.stroke();
 
-  // Reset transform
   ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
 
-function drawFlipper(f) {
-  const { x1, y1, x2, y2 } = flipperEndpoints(f);
-
-  ctx.save();
-  ctx.lineCap = "round";
-  ctx.lineWidth = 18;
-  ctx.strokeStyle = f.pressed ? "rgba(79,163,255,0.98)" : "rgba(47,125,255,0.75)";
-  ctx.beginPath();
-  ctx.moveTo(x1, y1);
-  ctx.lineTo(x2, y2);
-  ctx.stroke();
-
-  ctx.fillStyle = "rgba(255,255,255,0.10)";
-  ctx.beginPath();
-  ctx.arc(x1, y1, 10, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
+function loop(now) {
+  const dt = Math.min(0.02, (now - last) / 1000);
+  last = now;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
 }
 
-// Start
-resetGame();
-resizeCanvas();
-requestAnimationFrame(step);
+// START
+resetToPlunger();
+requestAnimationFrame(loop);
