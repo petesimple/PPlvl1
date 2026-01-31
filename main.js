@@ -52,11 +52,11 @@ const DRAIN_TRIGGER_Y = WORLD_H - 90;
 const DRAIN_X1 = (WORLD_W / 2) - (DRAIN_OPEN_W / 2);
 const DRAIN_X2 = (WORLD_W / 2) + (DRAIN_OPEN_W / 2);
 
-// Plunger lane (right) - FIXED
-const LANE_W = 80;                          // was 68
-const LANE_X2 = WORLD_W - TABLE_INSET - 6;  // pull inward to avoid wedging
+// Plunger lane (right) - tuned to reduce wedging
+const LANE_W = 80;
+const LANE_X2 = WORLD_W - TABLE_INSET - 6;
 const LANE_X1 = LANE_X2 - LANE_W;
-const LANE_RELEASE_Y = 520;                 // slightly lower exit
+const LANE_RELEASE_Y = 520;
 const PLUNGER_START_Y = WORLD_H - 120;
 
 // Diagonal funnel rails to block the side pockets
@@ -76,6 +76,7 @@ const puck = {
   vy: 0,
   stuck: true,
   mode: "plunger_ready", // plunger_ready | plunger | play
+  laneGrace: 0,          // frames of immunity after lane exit (prevents catching)
 };
 
 const flippers = {
@@ -171,11 +172,9 @@ canvas.addEventListener("pointerdown", (e) => {
   touchStartY = p.y;
   touchStartTime = performance.now();
 
-  // Bottom = flippers
   if (isLeftBottom(p)) { flippers.left.pressed = true; return; }
   if (isRightBottom(p)) { flippers.right.pressed = true; return; }
 
-  // Plunger pull if puck waiting and touch begins in lane
   if ((puck.mode === "plunger_ready" || puck.mode === "plunger") && isInPlungerLane(p)) {
     plungerActive = true;
     plungerPull = 0;
@@ -209,7 +208,6 @@ canvas.addEventListener("pointerup", (e) => {
   flippers.left.pressed = false;
   flippers.right.pressed = false;
 
-  // Plunger release
   if (plungerActive) {
     plungerActive = false;
 
@@ -224,7 +222,7 @@ canvas.addEventListener("pointerup", (e) => {
       const maxV = -980;
       puck.vy = minV + (maxV - minV) * plungerPull;
 
-      clampPuckInLane(); // ensure not overlapping at launch
+      clampPuckInLane();
     }
 
     plungerPull = 0;
@@ -232,7 +230,6 @@ canvas.addEventListener("pointerup", (e) => {
     return;
   }
 
-  // Tilt swipe outside bottom zone
   if (!isInBottomZone(p) &&
       dt <= SWIPE_MAX_TIME &&
       Math.abs(totalDx) >= SWIPE_MIN_PX &&
@@ -260,9 +257,16 @@ const AIR = 0.995;
 const REST = 0.88;
 const MAXS = 1500;
 
+// Keep puck comfortably inside lane to prevent wedging/jitter
+function clampPuckInLane() {
+  const pad = 2;
+  puck.x = clamp(puck.x, (LANE_X1 + puck.r + pad), (LANE_X2 - puck.r - pad));
+}
+
 function resetToPlunger() {
   puck.stuck = true;
   puck.mode = "plunger_ready";
+  puck.laneGrace = 0;
   puck.x = (LANE_X1 + LANE_X2) / 2;
   puck.y = PLUNGER_START_Y;
   puck.vx = 0;
@@ -274,17 +278,12 @@ function launchPuckKeyboard() {
   if (!puck.stuck) return;
   puck.stuck = false;
   puck.mode = "plunger";
+  puck.laneGrace = 0;
   puck.x = (LANE_X1 + LANE_X2) / 2;
   puck.y = PLUNGER_START_Y;
   puck.vx = 0;
   puck.vy = -820;
   clampPuckInLane();
-}
-
-// Keep puck comfortably inside lane to prevent wedging/jitter
-function clampPuckInLane() {
-  const pad = 2;
-  puck.x = clamp(puck.x, (LANE_X1 + puck.r + pad), (LANE_X2 - puck.r - pad));
 }
 
 // Segment collider for invisible rails
@@ -386,6 +385,9 @@ function update(dt) {
 
   if (puck.stuck) return;
 
+  // Countdown grace frames (prevents lane/funnel overlap trap)
+  if (puck.laneGrace > 0) puck.laneGrace--;
+
   // Integrate
   puck.vy += GRAV * dt;
   puck.x += puck.vx * dt;
@@ -407,12 +409,13 @@ function update(dt) {
   // LANE BEHAVIOR (FIXED)
   // =====================
   if (puck.mode !== "play") {
-    // Keep puck comfortably inside lane every frame
-    clampPuckInLane();
+    // Only clamp while truly in lane (not during grace)
+    if (puck.laneGrace === 0) clampPuckInLane();
 
     // Release into play once it reaches exit
     if (puck.y < LANE_RELEASE_Y) {
       puck.mode = "play";
+      puck.laneGrace = 10; // IMPORTANT: prevents catching on funnel rails
 
       // Place puck just OUTSIDE lane so it cannot re-collide and get caught
       puck.x = LANE_X1 - puck.r - 2;
@@ -431,15 +434,17 @@ function update(dt) {
     if (puck.x + puck.r > R) { puck.x = R - puck.r; puck.vx = -puck.vx * REST; }
   }
 
-  // Diagonal funnel rails blocking the two pockets
-  collideWithSegment(
-    FUNNEL_LEFT_X_TOP, FUNNEL_Y_TOP,
-    DRAIN_X1,          FUNNEL_Y_BOT
-  );
-  collideWithSegment(
-    FUNNEL_RIGHT_X_TOP, FUNNEL_Y_TOP,
-    DRAIN_X2,           FUNNEL_Y_BOT
-  );
+  // Diagonal funnel rails (skip during lane grace)
+  if (puck.laneGrace === 0) {
+    collideWithSegment(
+      FUNNEL_LEFT_X_TOP, FUNNEL_Y_TOP,
+      DRAIN_X1,          FUNNEL_Y_BOT
+    );
+    collideWithSegment(
+      FUNNEL_RIGHT_X_TOP, FUNNEL_Y_TOP,
+      DRAIN_X2,           FUNNEL_Y_BOT
+    );
+  }
 
   // Bottom center drain only
   if (puck.y + puck.r > BOTTOM_WALL_Y) {
