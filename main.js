@@ -95,8 +95,9 @@ function setHUD(){
 }
 
 function resetPuck(){
-  puck.x = WORLD_W/2;
-  puck.y = WORLD_H - 130;
+  // Spawn just above the flippers, centered in the gap
+  puck.x = WORLD_W / 2;
+  puck.y = FLIPPER_Y - 34;   // key line: above flippers
   puck.vx = 0;
   puck.vy = 0;
   puck.stuck = true;
@@ -112,8 +113,13 @@ function resetGame(){
 
 function launchPuck(){
   if (!puck.stuck) return;
+
+  // Ensure it launches from the same safe spot
+  puck.x = WORLD_W / 2;
+  puck.y = FLIPPER_Y - 34;
+
   puck.stuck = false;
-  puck.vx = rand(-60, 60);
+  puck.vx = rand(-40, 40);
   puck.vy = -560;
 }
 
