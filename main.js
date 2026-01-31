@@ -36,7 +36,7 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const rand = (a, b) => a + Math.random() * (b - a);
 
 // =====================
-// CALIBRATION KNOBS
+// CALIBRATION
 // =====================
 const TABLE_INSET = 22;
 
@@ -52,31 +52,27 @@ const DRAIN_TRIGGER_Y = WORLD_H - 90;
 const DRAIN_X1 = (WORLD_W / 2) - (DRAIN_OPEN_W / 2);
 const DRAIN_X2 = (WORLD_W / 2) + (DRAIN_OPEN_W / 2);
 
-// Plunger lane (right) - tuned to reduce wedging
-const LANE_W = 80;
-const LANE_X2 = WORLD_W - TABLE_INSET - 6;
-const LANE_X1 = LANE_X2 - LANE_W;
-const LANE_RELEASE_Y = 520;
-const PLUNGER_START_Y = WORLD_H - 120;
-
-// Diagonal funnel rails to block the side pockets
+// Funnel rails to block side pockets
 const FUNNEL_Y_TOP = FLIPPER_Y - 65;
 const FUNNEL_Y_BOT = BOTTOM_WALL_Y - 4;
 const FUNNEL_LEFT_X_TOP  = TABLE_INSET + 26;
 const FUNNEL_RIGHT_X_TOP = WORLD_W - TABLE_INSET - 26;
 
+// NEW: spawn higher in field
+const START_X = WORLD_W / 2;
+const START_Y = 360; // higher up (tune: 260-420 depending on feel)
+
 // =====================
 // GAME OBJECTS
 // =====================
 const puck = {
-  x: (LANE_X1 + LANE_X2) / 2,
-  y: PLUNGER_START_Y,
+  x: START_X,
+  y: START_Y,
   r: 12,
   vx: 0,
   vy: 0,
-  stuck: true,
-  mode: "plunger_ready", // plunger_ready | plunger | play
-  laneGrace: 0,          // frames of immunity after lane exit (prevents catching)
+  stuck: true,      // stuck means waiting for serve
+  mode: "play",     // always play mode now
 };
 
 const flippers = {
@@ -127,15 +123,11 @@ function screenToWorld(clientX, clientY) {
   return { x: x / scaleX, y: y / scaleY };
 }
 
-// Mobile gesture state
+// Mobile gestures
 let touchId = null;
 let touchStartX = 0;
 let touchStartY = 0;
 let touchStartTime = 0;
-
-let plungerActive = false;
-let plungerPull = 0; // 0..1
-const PLUNGER_MAX_PULL_PX = 180;
 
 const FLIPPER_ZONE_H = 0.28;
 const SWIPE_MIN_PX = 55;
@@ -151,14 +143,8 @@ function isLeftBottom(p) {
 function isRightBottom(p) {
   return isInBottomZone(p) && (p.x >= WORLD_W * 0.5);
 }
-function isInPlungerLane(p) {
-  return (p.x >= LANE_X1 - 14 && p.x <= LANE_X2 + 14);
-}
-function setPlungerPull(pullPx) {
-  plungerPull = clamp(pullPx / PLUNGER_MAX_PULL_PX, 0, 1);
-}
 function applyTilt(dir) {
-  if (puck.mode !== "play" || puck.stuck) return;
+  if (puck.stuck) return;
   puck.vx += dir * TILT_STRENGTH;
 }
 
@@ -174,12 +160,6 @@ canvas.addEventListener("pointerdown", (e) => {
 
   if (isLeftBottom(p)) { flippers.left.pressed = true; return; }
   if (isRightBottom(p)) { flippers.right.pressed = true; return; }
-
-  if ((puck.mode === "plunger_ready" || puck.mode === "plunger") && isInPlungerLane(p)) {
-    plungerActive = true;
-    plungerPull = 0;
-    return;
-  }
 });
 
 canvas.addEventListener("pointermove", (e) => {
@@ -189,11 +169,6 @@ canvas.addEventListener("pointermove", (e) => {
   if (isInBottomZone(p)) {
     flippers.left.pressed = isLeftBottom(p);
     flippers.right.pressed = isRightBottom(p);
-  }
-
-  if (plungerActive) {
-    const pullPx = Math.max(0, p.y - touchStartY);
-    setPlungerPull(pullPx);
   }
 });
 
@@ -208,33 +183,17 @@ canvas.addEventListener("pointerup", (e) => {
   flippers.left.pressed = false;
   flippers.right.pressed = false;
 
-  if (plungerActive) {
-    plungerActive = false;
-
-    if (plungerPull > 0.05) {
-      puck.stuck = false;
-      puck.mode = "plunger";
-      puck.x = (LANE_X1 + LANE_X2) / 2;
-      puck.y = PLUNGER_START_Y;
-      puck.vx = 0;
-
-      const minV = -420;
-      const maxV = -980;
-      puck.vy = minV + (maxV - minV) * plungerPull;
-
-      clampPuckInLane();
-    }
-
-    plungerPull = 0;
-    touchId = null;
-    return;
-  }
-
+  // Tilt swipe outside bottom zone
   if (!isInBottomZone(p) &&
       dt <= SWIPE_MAX_TIME &&
       Math.abs(totalDx) >= SWIPE_MIN_PX &&
       Math.abs(totalDy) < SWIPE_MIN_PX) {
     applyTilt(totalDx > 0 ? +1 : -1);
+  }
+
+  // Swipe down anywhere = serve (simple mobile launch)
+  if (dt <= 420 && totalDy > 90 && Math.abs(totalDx) < 90) {
+    input.launch = true;
   }
 
   touchId = null;
@@ -244,8 +203,6 @@ canvas.addEventListener("pointercancel", (e) => {
   if (touchId !== e.pointerId) return;
   flippers.left.pressed = false;
   flippers.right.pressed = false;
-  plungerActive = false;
-  plungerPull = 0;
   touchId = null;
 });
 
@@ -257,33 +214,22 @@ const AIR = 0.995;
 const REST = 0.88;
 const MAXS = 1500;
 
-// Keep puck comfortably inside lane to prevent wedging/jitter
-function clampPuckInLane() {
-  const pad = 2;
-  puck.x = clamp(puck.x, (LANE_X1 + puck.r + pad), (LANE_X2 - puck.r - pad));
-}
-
-function resetToPlunger() {
-  puck.stuck = true;
-  puck.mode = "plunger_ready";
-  puck.laneGrace = 0;
-  puck.x = (LANE_X1 + LANE_X2) / 2;
-  puck.y = PLUNGER_START_Y;
+function resetBallHigh() {
+  puck.x = START_X;
+  puck.y = START_Y;
   puck.vx = 0;
   puck.vy = 0;
-  clampPuckInLane();
+  puck.stuck = true;
 }
 
-function launchPuckKeyboard() {
+function serveBall() {
+  // Only serve if waiting
   if (!puck.stuck) return;
   puck.stuck = false;
-  puck.mode = "plunger";
-  puck.laneGrace = 0;
-  puck.x = (LANE_X1 + LANE_X2) / 2;
-  puck.y = PLUNGER_START_Y;
-  puck.vx = 0;
-  puck.vy = -820;
-  clampPuckInLane();
+
+  // Gentle "space cadet" serve
+  puck.vx = rand(-220, 220);
+  puck.vy = rand(-420, -520);
 }
 
 // Segment collider for invisible rails
@@ -372,7 +318,7 @@ let last = performance.now();
 
 function update(dt) {
   if (input.launch) {
-    launchPuckKeyboard();
+    serveBall();
     input.launch = false;
   }
 
@@ -384,9 +330,6 @@ function update(dt) {
   }
 
   if (puck.stuck) return;
-
-  // Countdown grace frames (prevents lane/funnel overlap trap)
-  if (puck.laneGrace > 0) puck.laneGrace--;
 
   // Integrate
   puck.vy += GRAV * dt;
@@ -405,63 +348,30 @@ function update(dt) {
     puck.vy = -puck.vy * REST;
   }
 
-  // =====================
-  // LANE BEHAVIOR (FIXED)
-  // =====================
-  if (puck.mode !== "play") {
-    // Only clamp while truly in lane (not during grace)
-    if (puck.laneGrace === 0) clampPuckInLane();
+  // Side walls
+  const L = TABLE_INSET;
+  const R = WORLD_W - TABLE_INSET;
+  if (puck.x - puck.r < L) { puck.x = L + puck.r; puck.vx = -puck.vx * REST; }
+  if (puck.x + puck.r > R) { puck.x = R - puck.r; puck.vx = -puck.vx * REST; }
 
-    // Release into play once it reaches exit
-    if (puck.y < LANE_RELEASE_Y) {
-      puck.mode = "play";
-      puck.laneGrace = 10; // IMPORTANT: prevents catching on funnel rails
-
-      // Place puck just OUTSIDE lane so it cannot re-collide and get caught
-      puck.x = LANE_X1 - puck.r - 2;
-
-      // Kick into table like Space Cadet
-      puck.vx = -320 + rand(-40, 40);
-
-      // Ensure upward energy to clear the exit area
-      puck.vy = Math.min(puck.vy, -420);
-    }
-  } else {
-    // Side walls in play
-    const L = TABLE_INSET;
-    const R = WORLD_W - TABLE_INSET;
-    if (puck.x - puck.r < L) { puck.x = L + puck.r; puck.vx = -puck.vx * REST; }
-    if (puck.x + puck.r > R) { puck.x = R - puck.r; puck.vx = -puck.vx * REST; }
-  }
-
-  // Diagonal funnel rails (skip during lane grace)
-  if (puck.laneGrace === 0) {
-    collideWithSegment(
-      FUNNEL_LEFT_X_TOP, FUNNEL_Y_TOP,
-      DRAIN_X1,          FUNNEL_Y_BOT
-    );
-    collideWithSegment(
-      FUNNEL_RIGHT_X_TOP, FUNNEL_Y_TOP,
-      DRAIN_X2,           FUNNEL_Y_BOT
-    );
-  }
+  // Funnel rails blocking side pockets
+  collideWithSegment(FUNNEL_LEFT_X_TOP,  FUNNEL_Y_TOP, DRAIN_X1, FUNNEL_Y_BOT);
+  collideWithSegment(FUNNEL_RIGHT_X_TOP, FUNNEL_Y_TOP, DRAIN_X2, FUNNEL_Y_BOT);
 
   // Bottom center drain only
   if (puck.y + puck.r > BOTTOM_WALL_Y) {
     const inDrain = (puck.x > DRAIN_X1 && puck.x < DRAIN_X2);
     if (inDrain && puck.y > DRAIN_TRIGGER_Y) {
-      resetToPlunger();
+      resetBallHigh();
       return;
     }
     puck.y = BOTTOM_WALL_Y - puck.r;
     puck.vy = -Math.abs(puck.vy) * REST;
   }
 
-  // Flippers only during play
-  if (puck.mode === "play") {
-    collideWithFlipper(flippers.left);
-    collideWithFlipper(flippers.right);
-  }
+  // Flippers
+  collideWithFlipper(flippers.left);
+  collideWithFlipper(flippers.right);
 }
 
 function drawFlipper(f) {
@@ -482,21 +392,6 @@ function draw() {
 
   if (bgReady) ctx.drawImage(BG, 0, 0, WORLD_W, WORLD_H);
 
-  // Plunger pull indicator
-  if (plungerActive) {
-    const barH = 90;
-    const barW = 10;
-    const x = LANE_X2 - 18;
-    const y = WORLD_H - 140;
-
-    ctx.save();
-    ctx.fillStyle = "rgba(255,255,255,0.12)";
-    ctx.fillRect(x, y - barH, barW, barH);
-    ctx.fillStyle = "rgba(79,163,255,0.85)";
-    ctx.fillRect(x, y - barH * plungerPull, barW, barH * plungerPull);
-    ctx.restore();
-  }
-
   drawFlipper(flippers.left);
   drawFlipper(flippers.right);
 
@@ -508,6 +403,11 @@ function draw() {
   ctx.lineWidth = 2;
   ctx.strokeStyle = "rgba(0,0,0,0.25)";
   ctx.stroke();
+
+  // Little hint text (optional)
+  ctx.fillStyle = "rgba(255,255,255,0.35)";
+  ctx.font = "12px system-ui, sans-serif";
+  ctx.fillText("Space or swipe down to serve", 14, WORLD_H - 18);
 
   ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
@@ -521,5 +421,5 @@ function loop(now) {
 }
 
 // Start
-resetToPlunger();
+resetBallHigh();
 requestAnimationFrame(loop);
