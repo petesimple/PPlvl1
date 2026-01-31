@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Play Puck Level 1</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="title">Play Puck Level 1</div>
+    <div class="hud">
+      <div>Score: <span id="score">0</span></div>
+      <div>Mult: <span id="mult">x1</span></div>
+      <div>Banks: <span id="banks">0</span></div>
+      <div class="keys">A / L = mallets, Space = launch, Q / P = nudge</div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <canvas id="game" width="480" height="800" aria-label="Play Puck Canvas"></canvas>
+
+    <div class="panel">
+      <button id="btnLaunch">Launch</button>
+      <button id="btnReset">Reset</button>
+      <label class="toggle">
+        <input type="checkbox" id="sound" checked />
+        <span>Sound (placeholder)</span>
+      </label>
+    </div>
+  </main>
+
+  <footer class="footer">
+    v0.1 prototype - Space Cadet energy, air hockey soul
+  </footer>
+
+  <script src="main.js"></script>
+</body>
+</html>
