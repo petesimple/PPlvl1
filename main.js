@@ -52,17 +52,16 @@ const DRAIN_TRIGGER_Y = WORLD_H - 90;
 const DRAIN_X1 = (WORLD_W / 2) - (DRAIN_OPEN_W / 2);
 const DRAIN_X2 = (WORLD_W / 2) + (DRAIN_OPEN_W / 2);
 
-// Plunger lane (right)
-const LANE_W = 68;
-const LANE_X2 = WORLD_W - TABLE_INSET;
+// Plunger lane (right) - FIXED
+const LANE_W = 80;                          // was 68
+const LANE_X2 = WORLD_W - TABLE_INSET - 6;  // pull inward to avoid wedging
 const LANE_X1 = LANE_X2 - LANE_W;
-const LANE_RELEASE_Y = 505;
+const LANE_RELEASE_Y = 520;                 // slightly lower exit
 const PLUNGER_START_Y = WORLD_H - 120;
 
-// Diagonal funnel rails to block the circled pockets
-const FUNNEL_Y_TOP = FLIPPER_Y - 65;   // starts above flippers
+// Diagonal funnel rails to block the side pockets
+const FUNNEL_Y_TOP = FLIPPER_Y - 65;
 const FUNNEL_Y_BOT = BOTTOM_WALL_Y - 4;
-
 const FUNNEL_LEFT_X_TOP  = TABLE_INSET + 26;
 const FUNNEL_RIGHT_X_TOP = WORLD_W - TABLE_INSET - 26;
 
@@ -103,9 +102,7 @@ const flippers = {
 // =====================
 // INPUT (desktop + mobile)
 // =====================
-const input = {
-  launch: false,
-};
+const input = { launch: false };
 
 // Desktop keys
 window.addEventListener("keydown", (e) => {
@@ -114,7 +111,6 @@ window.addEventListener("keydown", (e) => {
   if (k === flippers.left.key) flippers.left.pressed = true;
   if (k === flippers.right.key) flippers.right.pressed = true;
 });
-
 window.addEventListener("keyup", (e) => {
   const k = e.key.toLowerCase();
   if (k === " ") input.launch = false;
@@ -155,7 +151,7 @@ function isRightBottom(p) {
   return isInBottomZone(p) && (p.x >= WORLD_W * 0.5);
 }
 function isInPlungerLane(p) {
-  return (p.x >= LANE_X1 - 10 && p.x <= LANE_X2 + 10);
+  return (p.x >= LANE_X1 - 14 && p.x <= LANE_X2 + 14);
 }
 function setPlungerPull(pullPx) {
   plungerPull = clamp(pullPx / PLUNGER_MAX_PULL_PX, 0, 1);
@@ -227,6 +223,8 @@ canvas.addEventListener("pointerup", (e) => {
       const minV = -420;
       const maxV = -980;
       puck.vy = minV + (maxV - minV) * plungerPull;
+
+      clampPuckInLane(); // ensure not overlapping at launch
     }
 
     plungerPull = 0;
@@ -269,6 +267,7 @@ function resetToPlunger() {
   puck.y = PLUNGER_START_Y;
   puck.vx = 0;
   puck.vy = 0;
+  clampPuckInLane();
 }
 
 function launchPuckKeyboard() {
@@ -279,6 +278,13 @@ function launchPuckKeyboard() {
   puck.y = PLUNGER_START_Y;
   puck.vx = 0;
   puck.vy = -820;
+  clampPuckInLane();
+}
+
+// Keep puck comfortably inside lane to prevent wedging/jitter
+function clampPuckInLane() {
+  const pad = 2;
+  puck.x = clamp(puck.x, (LANE_X1 + puck.r + pad), (LANE_X2 - puck.r - pad));
 }
 
 // Segment collider for invisible rails
@@ -301,11 +307,9 @@ function collideWithSegment(x1, y1, x2, y2) {
   const nx = dx / dist;
   const ny = dy / dist;
 
-  // push out
   puck.x = cx + nx * puck.r;
   puck.y = cy + ny * puck.r;
 
-  // reflect only if moving into wall
   const vn = puck.vx * nx + puck.vy * ny;
   if (vn < 0) {
     puck.vx -= 2 * vn * nx;
@@ -399,16 +403,25 @@ function update(dt) {
     puck.vy = -puck.vy * REST;
   }
 
-  // Lane or play walls
+  // =====================
+  // LANE BEHAVIOR (FIXED)
+  // =====================
   if (puck.mode !== "play") {
-    // Plunger lane walls
-    if (puck.x - puck.r < LANE_X1) { puck.x = LANE_X1 + puck.r; puck.vx = -puck.vx * REST; }
-    if (puck.x + puck.r > LANE_X2) { puck.x = LANE_X2 - puck.r; puck.vx = -puck.vx * REST; }
+    // Keep puck comfortably inside lane every frame
+    clampPuckInLane();
 
+    // Release into play once it reaches exit
     if (puck.y < LANE_RELEASE_Y) {
       puck.mode = "play";
-      puck.vx = -260 + rand(-40, 40);
-      puck.vy = Math.min(puck.vy, -300);
+
+      // Place puck just OUTSIDE lane so it cannot re-collide and get caught
+      puck.x = LANE_X1 - puck.r - 2;
+
+      // Kick into table like Space Cadet
+      puck.vx = -320 + rand(-40, 40);
+
+      // Ensure upward energy to clear the exit area
+      puck.vy = Math.min(puck.vy, -420);
     }
   } else {
     // Side walls in play
@@ -418,9 +431,7 @@ function update(dt) {
     if (puck.x + puck.r > R) { puck.x = R - puck.r; puck.vx = -puck.vx * REST; }
   }
 
-  // =====================
-  // KEY FIX: diagonal funnel rails blocking the two pockets
-  // =====================
+  // Diagonal funnel rails blocking the two pockets
   collideWithSegment(
     FUNNEL_LEFT_X_TOP, FUNNEL_Y_TOP,
     DRAIN_X1,          FUNNEL_Y_BOT
