@@ -33,7 +33,7 @@ BG.onload = () => { bgReady = true; };
 // HELPERS
 // =====================
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const rand = (a, b) => a + Math.random() * (b - a);
+const rand  = (a, b) => a + Math.random() * (b - a);
 
 // =====================
 // CALIBRATION
@@ -52,15 +52,29 @@ const DRAIN_TRIGGER_Y = WORLD_H - 90;
 const DRAIN_X1 = (WORLD_W / 2) - (DRAIN_OPEN_W / 2);
 const DRAIN_X2 = (WORLD_W / 2) + (DRAIN_OPEN_W / 2);
 
-// Funnel rails to block side pockets
+// Funnel rails (upper) to block side pockets
 const FUNNEL_Y_TOP = FLIPPER_Y - 65;
 const FUNNEL_Y_BOT = BOTTOM_WALL_Y - 4;
 const FUNNEL_LEFT_X_TOP  = TABLE_INSET + 26;
 const FUNNEL_RIGHT_X_TOP = WORLD_W - TABLE_INSET - 26;
 
-// NEW: spawn higher in field
+// CRITICAL: lower funnel rails to guarantee NO outlane drains
+// These start just above the flippers and go straight to the drain edges.
+const LOWER_FUNNEL_Y_TOP = FLIPPER_Y - 18;
+const LOWER_FUNNEL_Y_BOT = BOTTOM_WALL_Y - 2;
+
+// Put the top points near the flipper tips (tuned to feel “Space Cadet-ish”)
+function flipperTipXLeft()  { return (WORLD_W / 2 - FLIPPER_OFFSET_X) + Math.cos(flippers.left.angle)  * (FLIPPER_LEN - 6); }
+function flipperTipXRight() { return (WORLD_W / 2 + FLIPPER_OFFSET_X) + Math.cos(flippers.right.angle) * (FLIPPER_LEN - 6); }
+
+// Spawn higher in field
 const START_X = WORLD_W / 2;
-const START_Y = 360; // higher up (tune: 260-420 depending on feel)
+const START_Y = 320;
+
+// =====================
+// GAME STATE
+// =====================
+let score = 0;
 
 // =====================
 // GAME OBJECTS
@@ -71,10 +85,11 @@ const puck = {
   r: 12,
   vx: 0,
   vy: 0,
-  stuck: true,      // stuck means waiting for serve
-  mode: "play",     // always play mode now
+  stuck: true,  // waiting for serve
+  mode: "play",
 };
 
+// Flippers
 const flippers = {
   left: {
     pivot: { x: WORLD_W / 2 - FLIPPER_OFFSET_X, y: FLIPPER_Y },
@@ -95,6 +110,21 @@ const flippers = {
     key: "l",
   },
 };
+
+// Bumpers (simple circles)
+const bumpers = [
+  { x: WORLD_W / 2,     y: 150, r: 26, power: 560, points: 250 },
+  { x: WORLD_W / 2 - 90,y: 210, r: 22, power: 520, points: 200 },
+  { x: WORLD_W / 2 + 90,y: 210, r: 22, power: 520, points: 200 },
+];
+
+// Slingshots (two short diagonal segments above flippers)
+const slings = [
+  // left sling
+  { x1: TABLE_INSET + 42, y1: FLIPPER_Y - 78, x2: WORLD_W / 2 - 120, y2: FLIPPER_Y - 38, kick: 420, points: 50 },
+  // right sling
+  { x1: WORLD_W - TABLE_INSET - 42, y1: FLIPPER_Y - 78, x2: WORLD_W / 2 + 120, y2: FLIPPER_Y - 38, kick: 420, points: 50 },
+];
 
 // =====================
 // INPUT (desktop + mobile)
@@ -191,7 +221,7 @@ canvas.addEventListener("pointerup", (e) => {
     applyTilt(totalDx > 0 ? +1 : -1);
   }
 
-  // Swipe down anywhere = serve (simple mobile launch)
+  // Swipe down anywhere = serve
   if (dt <= 420 && totalDy > 90 && Math.abs(totalDx) < 90) {
     input.launch = true;
   }
@@ -210,7 +240,7 @@ canvas.addEventListener("pointercancel", (e) => {
 // PHYSICS
 // =====================
 const GRAV = 760;
-const AIR = 0.995;
+const AIR  = 0.995;
 const REST = 0.88;
 const MAXS = 1500;
 
@@ -223,17 +253,15 @@ function resetBallHigh() {
 }
 
 function serveBall() {
-  // Only serve if waiting
   if (!puck.stuck) return;
   puck.stuck = false;
 
-  // Gentle "space cadet" serve
   puck.vx = rand(-220, 220);
   puck.vy = rand(-420, -520);
 }
 
-// Segment collider for invisible rails
-function collideWithSegment(x1, y1, x2, y2) {
+// Segment collider (invisible rails)
+function collideWithSegment(x1, y1, x2, y2, extraKick = 0, points = 0) {
   const sx = x2 - x1, sy = y2 - y1;
   const px = puck.x - x1, py = puck.y - y1;
   const segLen2 = sx * sx + sy * sy;
@@ -246,21 +274,66 @@ function collideWithSegment(x1, y1, x2, y2) {
   const dy = puck.y - cy;
   const dist2 = dx * dx + dy * dy;
 
-  if (dist2 >= puck.r * puck.r) return;
+  if (dist2 >= puck.r * puck.r) return false;
 
   const dist = Math.max(0.001, Math.sqrt(dist2));
   const nx = dx / dist;
   const ny = dy / dist;
 
+  // push out
   puck.x = cx + nx * puck.r;
   puck.y = cy + ny * puck.r;
 
+  // reflect if moving into wall
   const vn = puck.vx * nx + puck.vy * ny;
   if (vn < 0) {
     puck.vx -= 2 * vn * nx;
     puck.vy -= 2 * vn * ny;
+
+    // add a little "rubber" kick if requested
+    if (extraKick) {
+      puck.vx += nx * extraKick;
+      puck.vy += ny * extraKick;
+    }
+
     puck.vx *= REST;
     puck.vy *= REST;
+
+    if (points) score += points;
+  }
+  return true;
+}
+
+// Circle bumper collider
+function collideWithBumper(b) {
+  const dx = puck.x - b.x;
+  const dy = puck.y - b.y;
+  const rr = puck.r + b.r;
+  const dist2 = dx * dx + dy * dy;
+  if (dist2 >= rr * rr) return;
+
+  const dist = Math.max(0.001, Math.sqrt(dist2));
+  const nx = dx / dist;
+  const ny = dy / dist;
+
+  // snap to surface
+  puck.x = b.x + nx * rr;
+  puck.y = b.y + ny * rr;
+
+  // reflect
+  const vn = puck.vx * nx + puck.vy * ny;
+  if (vn < 0) {
+    puck.vx -= 2 * vn * nx;
+    puck.vy -= 2 * vn * ny;
+
+    // bumper kick
+    puck.vx += nx * b.power;
+    puck.vy += ny * b.power;
+
+    puck.vx *= REST;
+    puck.vy *= REST;
+
+    score += b.points;
   }
 }
 
@@ -348,15 +421,31 @@ function update(dt) {
     puck.vy = -puck.vy * REST;
   }
 
-  // Side walls
+  // Side walls (true table bounds)
   const L = TABLE_INSET;
   const R = WORLD_W - TABLE_INSET;
   if (puck.x - puck.r < L) { puck.x = L + puck.r; puck.vx = -puck.vx * REST; }
   if (puck.x + puck.r > R) { puck.x = R - puck.r; puck.vx = -puck.vx * REST; }
 
-  // Funnel rails blocking side pockets
+  // --- bumpers ---
+  for (const b of bumpers) collideWithBumper(b);
+
+  // --- slingshots ---
+  for (const s of slings) {
+    collideWithSegment(s.x1, s.y1, s.x2, s.y2, s.kick, s.points);
+  }
+
+  // Upper funnel rails (block pockets)
   collideWithSegment(FUNNEL_LEFT_X_TOP,  FUNNEL_Y_TOP, DRAIN_X1, FUNNEL_Y_BOT);
   collideWithSegment(FUNNEL_RIGHT_X_TOP, FUNNEL_Y_TOP, DRAIN_X2, FUNNEL_Y_BOT);
+
+  // LOWER funnel rails (guarantee no outlane drains)
+  // Use current flipper angles so rails always sit right where tips are.
+  const leftTopX  = clamp(flipperTipXLeft()  - 8, TABLE_INSET + 18, DRAIN_X1 - 10);
+  const rightTopX = clamp(flipperTipXRight() + 8, DRAIN_X2 + 10, WORLD_W - TABLE_INSET - 18);
+
+  collideWithSegment(leftTopX,  LOWER_FUNNEL_Y_TOP, DRAIN_X1, LOWER_FUNNEL_Y_BOT);
+  collideWithSegment(rightTopX, LOWER_FUNNEL_Y_TOP, DRAIN_X2, LOWER_FUNNEL_Y_BOT);
 
   // Bottom center drain only
   if (puck.y + puck.r > BOTTOM_WALL_Y) {
@@ -385,12 +474,27 @@ function drawFlipper(f) {
   ctx.stroke();
 }
 
+function drawBumper(b) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(255,255,255,0.10)";
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "rgba(255,255,255,0.25)";
+  ctx.stroke();
+  ctx.restore();
+}
+
 function draw() {
   resizeCanvas();
   ctx.setTransform(scaleX, 0, 0, scaleY, 0, 0);
   ctx.clearRect(0, 0, WORLD_W, WORLD_H);
 
   if (bgReady) ctx.drawImage(BG, 0, 0, WORLD_W, WORLD_H);
+
+  // bumpers (light overlay so you can see hit areas while testing)
+  for (const b of bumpers) drawBumper(b);
 
   drawFlipper(flippers.left);
   drawFlipper(flippers.right);
@@ -404,10 +508,14 @@ function draw() {
   ctx.strokeStyle = "rgba(0,0,0,0.25)";
   ctx.stroke();
 
-  // Little hint text (optional)
+  // HUD
+  ctx.fillStyle = "rgba(255,255,255,0.85)";
+  ctx.font = "16px system-ui, sans-serif";
+  ctx.fillText(`Score: ${score}`, 16, 28);
+
   ctx.fillStyle = "rgba(255,255,255,0.35)";
   ctx.font = "12px system-ui, sans-serif";
-  ctx.fillText("Space or swipe down to serve", 14, WORLD_H - 18);
+  ctx.fillText("Space or swipe down to serve", 16, WORLD_H - 18);
 
   ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
