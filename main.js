@@ -35,6 +35,17 @@ BG.onload = () => { bgReady = true; };
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const rand  = (a, b) => a + Math.random() * (b - a);
 
+function roundRect(ctx, x, y, w, h, r) {
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+}
+
 // =====================
 // CALIBRATION
 // =====================
@@ -78,8 +89,19 @@ let mult = 1;
 const multSteps = [1, 2, 3, 5];
 let multIndex = 0;
 
+// HUD pulse when points are scored
+let hudPulse = 0;     // 0..1
+let hudPulseVel = 0;  // spring velocity
+let lastScoreAdd = 0;
+
 function addScore(base) {
-  score += base * mult;
+  const add = base * mult;
+  score += add;
+  lastScoreAdd = add;
+
+  // Trigger neon pulse (stackable)
+  hudPulse = Math.min(1, hudPulse + 0.55);
+  hudPulseVel = -0.9;
 }
 
 // Simple hit flash timers (optional visual feedback)
@@ -397,6 +419,93 @@ function handleGoalZone() {
 }
 
 // =====================
+// NEON HUD
+// =====================
+function drawNeonScoreHUD() {
+  const x = 12;
+  const y = 12;
+  const w = 196;
+  const h = 66;
+  const r = 14;
+  const pad = 12;
+
+  // Pulse strength
+  const p = hudPulse; // 0..1
+  const glow = 12 + 30 * p;
+  const borderW = 3 + 3 * p;
+
+  // Panel base
+  ctx.save();
+  ctx.globalCompositeOperation = "source-over";
+
+  ctx.shadowColor = "rgba(0,0,0,0.65)";
+  ctx.shadowBlur = 10;
+  ctx.fillStyle = "rgba(0,0,0,0.45)";
+  roundRect(ctx, x, y, w, h, r);
+  ctx.fill();
+
+  // Neon rainbow border (animated)
+  const t = performance.now() * 0.001;
+  const grad = ctx.createLinearGradient(x, y, x + w, y + h);
+  grad.addColorStop(0.00, `hsla(${(t * 90 +   0) % 360}, 100%, 65%, 0.95)`);
+  grad.addColorStop(0.20, `hsla(${(t * 90 +  70) % 360}, 100%, 65%, 0.95)`);
+  grad.addColorStop(0.40, `hsla(${(t * 90 + 140) % 360}, 100%, 65%, 0.95)`);
+  grad.addColorStop(0.60, `hsla(${(t * 90 + 210) % 360}, 100%, 65%, 0.95)`);
+  grad.addColorStop(0.80, `hsla(${(t * 90 + 280) % 360}, 100%, 65%, 0.95)`);
+  grad.addColorStop(1.00, `hsla(${(t * 90 + 360) % 360}, 100%, 65%, 0.95)`);
+
+  ctx.shadowColor = "rgba(255,255,255,0.35)";
+  ctx.shadowBlur = glow;
+  ctx.strokeStyle = grad;
+  ctx.lineWidth = borderW;
+  roundRect(ctx, x, y, w, h, r);
+  ctx.stroke();
+
+  // Inner bezel line
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = "rgba(255,255,255,0.18)";
+  ctx.lineWidth = 1;
+  roundRect(ctx, x + 2, y + 2, w - 4, h - 4, r - 2);
+  ctx.stroke();
+
+  // Digital text
+  const scoreText = String(score).padStart(6, "0");
+
+  // Digit glow pulses with p
+  ctx.shadowColor = `hsla(${(t * 90) % 360}, 100%, 70%, 0.85)`;
+  ctx.shadowBlur = 10 + 24 * p;
+
+  ctx.fillStyle = "rgba(235,245,255,0.98)";
+  ctx.textBaseline = "top";
+
+  ctx.font = "800 12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace";
+  ctx.fillText("SCORE", x + pad, y + 10);
+
+  ctx.font = "900 28px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace";
+  ctx.fillText(scoreText, x + pad, y + 26);
+
+  // Mult badge
+  const mx = x + w - 60;
+  const my = y + 10;
+  ctx.shadowBlur = 8 + 16 * p;
+  ctx.fillStyle = "rgba(0,0,0,0.35)";
+  roundRect(ctx, mx, my, 48, 20, 8);
+  ctx.fill();
+
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = "rgba(255,255,255,0.20)";
+  ctx.lineWidth = 1;
+  roundRect(ctx, mx, my, 48, 20, 8);
+  ctx.stroke();
+
+  ctx.fillStyle = "rgba(255,255,255,0.9)";
+  ctx.font = "900 12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace";
+  ctx.fillText(`x${mult}`, mx + 12, my + 4);
+
+  ctx.restore();
+}
+
+// =====================
 // LOOP
 // =====================
 let last = performance.now();
@@ -405,6 +514,17 @@ function update(dt) {
   if (input.launch) {
     serveBall();
     input.launch = false;
+  }
+
+  // HUD pulse decay (smooth damped spring toward 0)
+  {
+    const k = 18;
+    const d = 10;
+    hudPulseVel += (-k * hudPulse - d * hudPulseVel) * dt;
+    hudPulse += hudPulseVel * dt;
+
+    if (hudPulse < 0) { hudPulse = 0; hudPulseVel = 0; }
+    if (hudPulse > 1) { hudPulse = 1; hudPulseVel *= -0.5; }
   }
 
   // decay flashes
@@ -449,7 +569,6 @@ function update(dt) {
   collideWithCircleTarget(targets.bank, () => {
     addScore(targets.bank.points);
     flashBank = 10;
-    // Small "bank bonus" feel
     puck.vx += rand(-80, 80);
   });
 
@@ -458,7 +577,6 @@ function update(dt) {
     addScore(targets.multiplier.points);
     flashMult = 10;
 
-    // Advance multiplier
     multIndex = (multIndex + 1) % multSteps.length;
     mult = multSteps[multIndex];
   });
@@ -471,7 +589,7 @@ function update(dt) {
   collideWithSegment(FUNNEL_LEFT_X_TOP,  FUNNEL_Y_TOP, DRAIN_X1, FUNNEL_Y_BOT);
   collideWithSegment(FUNNEL_RIGHT_X_TOP, FUNNEL_Y_TOP, DRAIN_X2, FUNNEL_Y_BOT);
 
-  // HARD outlane blockers (THIS stops side drains forever)
+  // HARD outlane blockers (stops side drains)
   collideWithSegment(OUTLANE_LEFT_X_TOP,  OUTLANE_Y_TOP, DRAIN_X1, OUTLANE_Y_BOT);
   collideWithSegment(OUTLANE_RIGHT_X_TOP, OUTLANE_Y_TOP, DRAIN_X2, OUTLANE_Y_BOT);
 
@@ -509,6 +627,10 @@ function draw() {
 
   if (bgReady) ctx.drawImage(BG, 0, 0, WORLD_W, WORLD_H);
 
+  // Flippers (kept as before)
+  drawFlipper(flippers.left);
+  drawFlipper(flippers.right);
+
   // Puck
   ctx.beginPath();
   ctx.arc(puck.x, puck.y, puck.r, 0, Math.PI * 2);
@@ -518,25 +640,22 @@ function draw() {
   ctx.strokeStyle = "rgba(0,0,0,0.25)";
   ctx.stroke();
 
-  // HUD
-  ctx.fillStyle = "rgba(255,255,255,0.90)";
-  ctx.font = "16px system-ui, sans-serif";
-  ctx.fillText(`Score: ${score}`, 16, 28);
-  ctx.fillText(`x${mult}`, 16, 50);
-
-  // Optional tiny hit flashes (debug-ish but fun)
+  // Optional tiny hit flashes (debug-ish)
   if (flashBank) {
-    ctx.fillStyle = "rgba(255,120,80,0.25)";
+    ctx.fillStyle = "rgba(255,120,80,0.22)";
     ctx.beginPath(); ctx.arc(targets.bank.x, targets.bank.y, targets.bank.r + 8, 0, Math.PI * 2); ctx.fill();
   }
   if (flashMult) {
-    ctx.fillStyle = "rgba(255,120,80,0.25)";
+    ctx.fillStyle = "rgba(255,120,80,0.22)";
     ctx.beginPath(); ctx.arc(targets.multiplier.x, targets.multiplier.y, targets.multiplier.r + 8, 0, Math.PI * 2); ctx.fill();
   }
   if (flashGoal) {
-    ctx.fillStyle = "rgba(80,200,255,0.18)";
+    ctx.fillStyle = "rgba(80,200,255,0.16)";
     ctx.fillRect(goalZone.x1, goalZone.y1, goalZone.x2 - goalZone.x1, goalZone.y2 - goalZone.y1);
   }
+
+  // Neon digital overlay HUD (NEW)
+  drawNeonScoreHUD();
 
   // Hint
   ctx.fillStyle = "rgba(255,255,255,0.35)";
