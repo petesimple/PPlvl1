@@ -1,3 +1,6 @@
+// main.js - Play Puck Level 1 (neon HUD + scoring targets + no side drains)
+// Drop-in file
+
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 
@@ -69,13 +72,16 @@ const FUNNEL_Y_BOT = BOTTOM_WALL_Y - 4;
 const FUNNEL_LEFT_X_TOP  = TABLE_INSET + 26;
 const FUNNEL_RIGHT_X_TOP = WORLD_W - TABLE_INSET - 26;
 
-// HARD OUTLANE BLOCKERS (the real fix)
-// These rails GUARANTEE no ball can fall down the sides outside the flippers.
-// They run from just above the flippers down to the drain edges.
-const OUTLANE_Y_TOP = FLIPPER_Y - 30;
+// HARD OUTLANE BLOCKERS (real fix: thick rails + caps)
+const OUTLANE_Y_TOP = FLIPPER_Y - 80;     // start higher so it blocks earlier
 const OUTLANE_Y_BOT = BOTTOM_WALL_Y - 2;
-const OUTLANE_LEFT_X_TOP  = TABLE_INSET + 18;
-const OUTLANE_RIGHT_X_TOP = WORLD_W - TABLE_INSET - 18;
+
+// start basically on the wall so no side gap exists
+const OUTLANE_LEFT_X_TOP  = TABLE_INSET + 2;
+const OUTLANE_RIGHT_X_TOP = WORLD_W - TABLE_INSET - 2;
+
+// small horizontal “cap” rails so the puck cannot sneak around the top corner
+const OUTLANE_CAP_Y = OUTLANE_Y_TOP;
 
 // Spawn higher in field
 const START_X = WORLD_W / 2;
@@ -104,7 +110,7 @@ function addScore(base) {
   hudPulseVel = -0.9;
 }
 
-// Simple hit flash timers (optional visual feedback)
+// Simple hit flash timers
 let flashBank = 0;
 let flashMult = 0;
 let flashGoal = 0;
@@ -118,7 +124,7 @@ const puck = {
   r: 12,
   vx: 0,
   vy: 0,
-  stuck: true, // waiting for serve
+  stuck: true,
   mode: "play",
 };
 
@@ -144,7 +150,7 @@ const flippers = {
   },
 };
 
-// Targets lined up to the background image (derived from bg-level1.png)
+// Targets lined up to the background image
 const targets = {
   bank:       { x: 113.2, y: 121.0, r: 28, power: 620, points: 250 },
   multiplier: { x: 367.7, y: 120.0, r: 28, power: 620, points: 250 },
@@ -291,8 +297,8 @@ function serveBall() {
   puck.vy = rand(-420, -520);
 }
 
-// Segment collider for invisible rails
-function collideWithSegment(x1, y1, x2, y2) {
+// Segment collider (thick rail support)
+function collideWithSegment(x1, y1, x2, y2, extra = 0) {
   const sx = x2 - x1, sy = y2 - y1;
   const px = puck.x - x1, py = puck.y - y1;
   const segLen2 = sx * sx + sy * sy;
@@ -305,14 +311,15 @@ function collideWithSegment(x1, y1, x2, y2) {
   const dy = puck.y - cy;
   const dist2 = dx * dx + dy * dy;
 
-  if (dist2 >= puck.r * puck.r) return;
+  const hitR = puck.r + extra;
+  if (dist2 >= hitR * hitR) return;
 
   const dist = Math.max(0.001, Math.sqrt(dist2));
   const nx = dx / dist;
   const ny = dy / dist;
 
-  puck.x = cx + nx * puck.r;
-  puck.y = cy + ny * puck.r;
+  puck.x = cx + nx * hitR;
+  puck.y = cy + ny * hitR;
 
   const vn = puck.vx * nx + puck.vy * ny;
   if (vn < 0) {
@@ -335,17 +342,14 @@ function collideWithCircleTarget(t, onHit) {
   const nx = dx / dist;
   const ny = dy / dist;
 
-  // Move puck to surface
   puck.x = t.x + nx * rr;
   puck.y = t.y + ny * rr;
 
-  // Reflect
   const vn = puck.vx * nx + puck.vy * ny;
   if (vn < 0) {
     puck.vx -= 2 * vn * nx;
     puck.vy -= 2 * vn * ny;
 
-    // Punch it like an arcade target
     puck.vx += nx * t.power;
     puck.vy += ny * t.power;
 
@@ -408,12 +412,9 @@ function handleGoalZone() {
   if (puck.x < goalZone.x1 || puck.x > goalZone.x2) return;
   if (puck.y < goalZone.y1 || puck.y > goalZone.y2) return;
 
-  // Only award if moving upward into the zone (feels like a “clean shot”)
   if (puck.vy < -120) {
     addScore(goalZone.points);
     flashGoal = 10;
-
-    // Soft rebound so it doesn’t camp there
     puck.vy = Math.abs(puck.vy) * 0.55;
   }
 }
@@ -422,19 +423,19 @@ function handleGoalZone() {
 // NEON HUD
 // =====================
 function drawNeonScoreHUD() {
-  const w = 260;     // wider looks better in the header
-const h = 72;
-const x = (WORLD_W - w) / 2; // centered
-const y = 32;      // sits in the "PLAY PUCK" header panel zone
+  // centered in the header panel
+  const w = 260;
+  const h = 72;
+  const x = (WORLD_W - w) / 2;
+  const y = 32;
+
   const r = 14;
   const pad = 12;
 
-  // Pulse strength
-  const p = hudPulse; // 0..1
+  const p = hudPulse;
   const glow = 12 + 30 * p;
   const borderW = 3 + 3 * p;
 
-  // Panel base
   ctx.save();
   ctx.globalCompositeOperation = "source-over";
 
@@ -444,7 +445,6 @@ const y = 32;      // sits in the "PLAY PUCK" header panel zone
   roundRect(ctx, x, y, w, h, r);
   ctx.fill();
 
-  // Neon rainbow border (animated)
   const t = performance.now() * 0.001;
   const grad = ctx.createLinearGradient(x, y, x + w, y + h);
   grad.addColorStop(0.00, `hsla(${(t * 90 +   0) % 360}, 100%, 65%, 0.95)`);
@@ -461,17 +461,14 @@ const y = 32;      // sits in the "PLAY PUCK" header panel zone
   roundRect(ctx, x, y, w, h, r);
   ctx.stroke();
 
-  // Inner bezel line
   ctx.shadowBlur = 0;
   ctx.strokeStyle = "rgba(255,255,255,0.18)";
   ctx.lineWidth = 1;
   roundRect(ctx, x + 2, y + 2, w - 4, h - 4, r - 2);
   ctx.stroke();
 
-  // Digital text
   const scoreText = String(score).padStart(6, "0");
 
-  // Digit glow pulses with p
   ctx.shadowColor = `hsla(${(t * 90) % 360}, 100%, 70%, 0.85)`;
   ctx.shadowBlur = 10 + 24 * p;
 
@@ -484,7 +481,6 @@ const y = 32;      // sits in the "PLAY PUCK" header panel zone
   ctx.font = "900 28px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace";
   ctx.fillText(scoreText, x + pad, y + 26);
 
-  // Mult badge
   const mx = x + w - 60;
   const my = y + 10;
   ctx.shadowBlur = 8 + 16 * p;
@@ -505,6 +501,33 @@ const y = 32;      // sits in the "PLAY PUCK" header panel zone
   ctx.restore();
 }
 
+// Visible scoring markers so they’re not “missing”
+function drawNeonRing(x, y, r, alpha = 0.18) {
+  const t = performance.now() * 0.001;
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.lineWidth = 5;
+  ctx.shadowBlur = 18;
+  ctx.shadowColor = `hsla(${(t * 90) % 360}, 100%, 70%, ${alpha})`;
+  ctx.strokeStyle = `hsla(${(t * 90) % 360}, 100%, 70%, ${alpha})`;
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawGoalOutline(z, alpha = 0.14) {
+  const t = performance.now() * 0.001;
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.lineWidth = 3;
+  ctx.shadowBlur = 16;
+  ctx.shadowColor = `hsla(${(t * 90 + 180) % 360}, 100%, 70%, ${alpha})`;
+  ctx.strokeStyle = `hsla(${(t * 90 + 180) % 360}, 100%, 70%, ${alpha})`;
+  ctx.strokeRect(z.x1, z.y1, z.x2 - z.x1, z.y2 - z.y1);
+  ctx.restore();
+}
+
 // =====================
 // LOOP
 // =====================
@@ -516,18 +539,16 @@ function update(dt) {
     input.launch = false;
   }
 
-  // HUD pulse decay (smooth damped spring toward 0)
+  // HUD pulse decay
   {
     const k = 18;
     const d = 10;
     hudPulseVel += (-k * hudPulse - d * hudPulseVel) * dt;
     hudPulse += hudPulseVel * dt;
-
     if (hudPulse < 0) { hudPulse = 0; hudPulseVel = 0; }
     if (hudPulse > 1) { hudPulse = 1; hudPulseVel *= -0.5; }
   }
 
-  // decay flashes
   if (flashBank > 0) flashBank--;
   if (flashMult > 0) flashMult--;
   if (flashGoal > 0) flashGoal--;
@@ -564,7 +585,6 @@ function update(dt) {
   if (puck.x - puck.r < L) { puck.x = L + puck.r; puck.vx = -puck.vx * REST; }
   if (puck.x + puck.r > R) { puck.x = R - puck.r; puck.vx = -puck.vx * REST; }
 
-  // --- Features from the background ---
   // BANK target
   collideWithCircleTarget(targets.bank, () => {
     addScore(targets.bank.points);
@@ -576,22 +596,25 @@ function update(dt) {
   collideWithCircleTarget(targets.multiplier, () => {
     addScore(targets.multiplier.points);
     flashMult = 10;
-
     multIndex = (multIndex + 1) % multSteps.length;
     mult = multSteps[multIndex];
   });
 
-  // GOAL ZONE rectangle
+  // GOAL ZONE
   handleGoalZone();
 
-  // --- Rails ---
-  // Upper funnel rails
-  collideWithSegment(FUNNEL_LEFT_X_TOP,  FUNNEL_Y_TOP, DRAIN_X1, FUNNEL_Y_BOT);
-  collideWithSegment(FUNNEL_RIGHT_X_TOP, FUNNEL_Y_TOP, DRAIN_X2, FUNNEL_Y_BOT);
+  // Rails
+  collideWithSegment(FUNNEL_LEFT_X_TOP,  FUNNEL_Y_TOP, DRAIN_X1, FUNNEL_Y_BOT, 0);
+  collideWithSegment(FUNNEL_RIGHT_X_TOP, FUNNEL_Y_TOP, DRAIN_X2, FUNNEL_Y_BOT, 0);
 
-  // HARD outlane blockers (stops side drains)
-  collideWithSegment(OUTLANE_LEFT_X_TOP,  OUTLANE_Y_TOP, DRAIN_X1, OUTLANE_Y_BOT);
-  collideWithSegment(OUTLANE_RIGHT_X_TOP, OUTLANE_Y_TOP, DRAIN_X2, OUTLANE_Y_BOT);
+  // HARD outlane blockers (thick + capped)
+  const OUTLANE_THICK = 10;
+  collideWithSegment(OUTLANE_LEFT_X_TOP,  OUTLANE_Y_TOP, DRAIN_X1, OUTLANE_Y_BOT, OUTLANE_THICK);
+  collideWithSegment(OUTLANE_RIGHT_X_TOP, OUTLANE_Y_TOP, DRAIN_X2, OUTLANE_Y_BOT, OUTLANE_THICK);
+
+  // Caps connect wall to rail start
+  collideWithSegment(TABLE_INSET, OUTLANE_CAP_Y, OUTLANE_LEFT_X_TOP, OUTLANE_CAP_Y, OUTLANE_THICK);
+  collideWithSegment(WORLD_W - TABLE_INSET, OUTLANE_CAP_Y, OUTLANE_RIGHT_X_TOP, OUTLANE_CAP_Y, OUTLANE_THICK);
 
   // Bottom center drain only
   if (puck.y + puck.r > BOTTOM_WALL_Y) {
@@ -627,7 +650,12 @@ function draw() {
 
   if (bgReady) ctx.drawImage(BG, 0, 0, WORLD_W, WORLD_H);
 
-  // Flippers (kept as before)
+  // Visible scoring markers (so they don’t disappear into the art)
+  drawNeonRing(targets.bank.x, targets.bank.y, targets.bank.r + 10, 0.16);
+  drawNeonRing(targets.multiplier.x, targets.multiplier.y, targets.multiplier.r + 10, 0.16);
+  drawGoalOutline(goalZone, 0.12);
+
+  // Flippers
   drawFlipper(flippers.left);
   drawFlipper(flippers.right);
 
@@ -640,21 +668,21 @@ function draw() {
   ctx.strokeStyle = "rgba(0,0,0,0.25)";
   ctx.stroke();
 
-  // Optional tiny hit flashes (debug-ish)
+  // Optional hit flashes
   if (flashBank) {
-    ctx.fillStyle = "rgba(255,120,80,0.22)";
-    ctx.beginPath(); ctx.arc(targets.bank.x, targets.bank.y, targets.bank.r + 8, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "rgba(255,120,80,0.18)";
+    ctx.beginPath(); ctx.arc(targets.bank.x, targets.bank.y, targets.bank.r + 14, 0, Math.PI * 2); ctx.fill();
   }
   if (flashMult) {
-    ctx.fillStyle = "rgba(255,120,80,0.22)";
-    ctx.beginPath(); ctx.arc(targets.multiplier.x, targets.multiplier.y, targets.multiplier.r + 8, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "rgba(255,120,80,0.18)";
+    ctx.beginPath(); ctx.arc(targets.multiplier.x, targets.multiplier.y, targets.multiplier.r + 14, 0, Math.PI * 2); ctx.fill();
   }
   if (flashGoal) {
-    ctx.fillStyle = "rgba(80,200,255,0.16)";
+    ctx.fillStyle = "rgba(80,200,255,0.12)";
     ctx.fillRect(goalZone.x1, goalZone.y1, goalZone.x2 - goalZone.x1, goalZone.y2 - goalZone.y1);
   }
 
-  // Neon digital overlay HUD (NEW)
+  // Neon HUD
   drawNeonScoreHUD();
 
   // Hint
