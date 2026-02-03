@@ -52,20 +52,19 @@ const DRAIN_TRIGGER_Y = WORLD_H - 90;
 const DRAIN_X1 = (WORLD_W / 2) - (DRAIN_OPEN_W / 2);
 const DRAIN_X2 = (WORLD_W / 2) + (DRAIN_OPEN_W / 2);
 
-// Funnel rails (upper) to block side pockets
+// Upper funnel rails (help guide ball toward drain edges)
 const FUNNEL_Y_TOP = FLIPPER_Y - 65;
 const FUNNEL_Y_BOT = BOTTOM_WALL_Y - 4;
 const FUNNEL_LEFT_X_TOP  = TABLE_INSET + 26;
 const FUNNEL_RIGHT_X_TOP = WORLD_W - TABLE_INSET - 26;
 
-// CRITICAL: lower funnel rails to guarantee NO outlane drains
-// These start just above the flippers and go straight to the drain edges.
-const LOWER_FUNNEL_Y_TOP = FLIPPER_Y - 18;
-const LOWER_FUNNEL_Y_BOT = BOTTOM_WALL_Y - 2;
-
-// Put the top points near the flipper tips (tuned to feel “Space Cadet-ish”)
-function flipperTipXLeft()  { return (WORLD_W / 2 - FLIPPER_OFFSET_X) + Math.cos(flippers.left.angle)  * (FLIPPER_LEN - 6); }
-function flipperTipXRight() { return (WORLD_W / 2 + FLIPPER_OFFSET_X) + Math.cos(flippers.right.angle) * (FLIPPER_LEN - 6); }
+// HARD OUTLANE BLOCKERS (the real fix)
+// These rails GUARANTEE no ball can fall down the sides outside the flippers.
+// They run from just above the flippers down to the drain edges.
+const OUTLANE_Y_TOP = FLIPPER_Y - 30;
+const OUTLANE_Y_BOT = BOTTOM_WALL_Y - 2;
+const OUTLANE_LEFT_X_TOP  = TABLE_INSET + 18;
+const OUTLANE_RIGHT_X_TOP = WORLD_W - TABLE_INSET - 18;
 
 // Spawn higher in field
 const START_X = WORLD_W / 2;
@@ -75,6 +74,18 @@ const START_Y = 320;
 // GAME STATE
 // =====================
 let score = 0;
+let mult = 1;
+const multSteps = [1, 2, 3, 5];
+let multIndex = 0;
+
+function addScore(base) {
+  score += base * mult;
+}
+
+// Simple hit flash timers (optional visual feedback)
+let flashBank = 0;
+let flashMult = 0;
+let flashGoal = 0;
 
 // =====================
 // GAME OBJECTS
@@ -85,7 +96,7 @@ const puck = {
   r: 12,
   vx: 0,
   vy: 0,
-  stuck: true,  // waiting for serve
+  stuck: true, // waiting for serve
   mode: "play",
 };
 
@@ -111,20 +122,18 @@ const flippers = {
   },
 };
 
-// Bumpers (simple circles)
-const bumpers = [
-  { x: WORLD_W / 2,     y: 150, r: 26, power: 560, points: 250 },
-  { x: WORLD_W / 2 - 90,y: 210, r: 22, power: 520, points: 200 },
-  { x: WORLD_W / 2 + 90,y: 210, r: 22, power: 520, points: 200 },
-];
+// Targets lined up to the background image (derived from bg-level1.png)
+const targets = {
+  bank:       { x: 113.2, y: 121.0, r: 28, power: 620, points: 250 },
+  multiplier: { x: 367.7, y: 120.0, r: 28, power: 620, points: 250 },
+};
 
-// Slingshots (two short diagonal segments above flippers)
-const slings = [
-  // left sling
-  { x1: TABLE_INSET + 42, y1: FLIPPER_Y - 78, x2: WORLD_W / 2 - 120, y2: FLIPPER_Y - 38, kick: 420, points: 50 },
-  // right sling
-  { x1: WORLD_W - TABLE_INSET - 42, y1: FLIPPER_Y - 78, x2: WORLD_W / 2 + 120, y2: FLIPPER_Y - 38, kick: 420, points: 50 },
-];
+// Goal zone (top center label area)
+const goalZone = {
+  x1: 160, y1: 55,
+  x2: 320, y2: 130,
+  points: 400,
+};
 
 // =====================
 // INPUT (desktop + mobile)
@@ -260,8 +269,8 @@ function serveBall() {
   puck.vy = rand(-420, -520);
 }
 
-// Segment collider (invisible rails)
-function collideWithSegment(x1, y1, x2, y2, extraKick = 0, points = 0) {
+// Segment collider for invisible rails
+function collideWithSegment(x1, y1, x2, y2) {
   const sx = x2 - x1, sy = y2 - y1;
   const px = puck.x - x1, py = puck.y - y1;
   const segLen2 = sx * sx + sy * sy;
@@ -274,41 +283,29 @@ function collideWithSegment(x1, y1, x2, y2, extraKick = 0, points = 0) {
   const dy = puck.y - cy;
   const dist2 = dx * dx + dy * dy;
 
-  if (dist2 >= puck.r * puck.r) return false;
+  if (dist2 >= puck.r * puck.r) return;
 
   const dist = Math.max(0.001, Math.sqrt(dist2));
   const nx = dx / dist;
   const ny = dy / dist;
 
-  // push out
   puck.x = cx + nx * puck.r;
   puck.y = cy + ny * puck.r;
 
-  // reflect if moving into wall
   const vn = puck.vx * nx + puck.vy * ny;
   if (vn < 0) {
     puck.vx -= 2 * vn * nx;
     puck.vy -= 2 * vn * ny;
-
-    // add a little "rubber" kick if requested
-    if (extraKick) {
-      puck.vx += nx * extraKick;
-      puck.vy += ny * extraKick;
-    }
-
     puck.vx *= REST;
     puck.vy *= REST;
-
-    if (points) score += points;
   }
-  return true;
 }
 
-// Circle bumper collider
-function collideWithBumper(b) {
-  const dx = puck.x - b.x;
-  const dy = puck.y - b.y;
-  const rr = puck.r + b.r;
+// Circle target / bumper collider
+function collideWithCircleTarget(t, onHit) {
+  const dx = puck.x - t.x;
+  const dy = puck.y - t.y;
+  const rr = puck.r + t.r;
   const dist2 = dx * dx + dy * dy;
   if (dist2 >= rr * rr) return;
 
@@ -316,24 +313,24 @@ function collideWithBumper(b) {
   const nx = dx / dist;
   const ny = dy / dist;
 
-  // snap to surface
-  puck.x = b.x + nx * rr;
-  puck.y = b.y + ny * rr;
+  // Move puck to surface
+  puck.x = t.x + nx * rr;
+  puck.y = t.y + ny * rr;
 
-  // reflect
+  // Reflect
   const vn = puck.vx * nx + puck.vy * ny;
   if (vn < 0) {
     puck.vx -= 2 * vn * nx;
     puck.vy -= 2 * vn * ny;
 
-    // bumper kick
-    puck.vx += nx * b.power;
-    puck.vy += ny * b.power;
+    // Punch it like an arcade target
+    puck.vx += nx * t.power;
+    puck.vy += ny * t.power;
 
     puck.vx *= REST;
     puck.vy *= REST;
 
-    score += b.points;
+    onHit?.();
   }
 }
 
@@ -384,6 +381,21 @@ function collideWithFlipper(f) {
   puck.vy *= REST;
 }
 
+// Goal zone check (rectangle)
+function handleGoalZone() {
+  if (puck.x < goalZone.x1 || puck.x > goalZone.x2) return;
+  if (puck.y < goalZone.y1 || puck.y > goalZone.y2) return;
+
+  // Only award if moving upward into the zone (feels like a “clean shot”)
+  if (puck.vy < -120) {
+    addScore(goalZone.points);
+    flashGoal = 10;
+
+    // Soft rebound so it doesn’t camp there
+    puck.vy = Math.abs(puck.vy) * 0.55;
+  }
+}
+
 // =====================
 // LOOP
 // =====================
@@ -394,6 +406,11 @@ function update(dt) {
     serveBall();
     input.launch = false;
   }
+
+  // decay flashes
+  if (flashBank > 0) flashBank--;
+  if (flashMult > 0) flashMult--;
+  if (flashGoal > 0) flashGoal--;
 
   // Flipper animation
   for (const f of [flippers.left, flippers.right]) {
@@ -421,31 +438,42 @@ function update(dt) {
     puck.vy = -puck.vy * REST;
   }
 
-  // Side walls (true table bounds)
+  // Side walls
   const L = TABLE_INSET;
   const R = WORLD_W - TABLE_INSET;
   if (puck.x - puck.r < L) { puck.x = L + puck.r; puck.vx = -puck.vx * REST; }
   if (puck.x + puck.r > R) { puck.x = R - puck.r; puck.vx = -puck.vx * REST; }
 
-  // --- bumpers ---
-  for (const b of bumpers) collideWithBumper(b);
+  // --- Features from the background ---
+  // BANK target
+  collideWithCircleTarget(targets.bank, () => {
+    addScore(targets.bank.points);
+    flashBank = 10;
+    // Small "bank bonus" feel
+    puck.vx += rand(-80, 80);
+  });
 
-  // --- slingshots ---
-  for (const s of slings) {
-    collideWithSegment(s.x1, s.y1, s.x2, s.y2, s.kick, s.points);
-  }
+  // MULTIPLIER target
+  collideWithCircleTarget(targets.multiplier, () => {
+    addScore(targets.multiplier.points);
+    flashMult = 10;
 
-  // Upper funnel rails (block pockets)
+    // Advance multiplier
+    multIndex = (multIndex + 1) % multSteps.length;
+    mult = multSteps[multIndex];
+  });
+
+  // GOAL ZONE rectangle
+  handleGoalZone();
+
+  // --- Rails ---
+  // Upper funnel rails
   collideWithSegment(FUNNEL_LEFT_X_TOP,  FUNNEL_Y_TOP, DRAIN_X1, FUNNEL_Y_BOT);
   collideWithSegment(FUNNEL_RIGHT_X_TOP, FUNNEL_Y_TOP, DRAIN_X2, FUNNEL_Y_BOT);
 
-  // LOWER funnel rails (guarantee no outlane drains)
-  // Use current flipper angles so rails always sit right where tips are.
-  const leftTopX  = clamp(flipperTipXLeft()  - 8, TABLE_INSET + 18, DRAIN_X1 - 10);
-  const rightTopX = clamp(flipperTipXRight() + 8, DRAIN_X2 + 10, WORLD_W - TABLE_INSET - 18);
-
-  collideWithSegment(leftTopX,  LOWER_FUNNEL_Y_TOP, DRAIN_X1, LOWER_FUNNEL_Y_BOT);
-  collideWithSegment(rightTopX, LOWER_FUNNEL_Y_TOP, DRAIN_X2, LOWER_FUNNEL_Y_BOT);
+  // HARD outlane blockers (THIS stops side drains forever)
+  collideWithSegment(OUTLANE_LEFT_X_TOP,  OUTLANE_Y_TOP, DRAIN_X1, OUTLANE_Y_BOT);
+  collideWithSegment(OUTLANE_RIGHT_X_TOP, OUTLANE_Y_TOP, DRAIN_X2, OUTLANE_Y_BOT);
 
   // Bottom center drain only
   if (puck.y + puck.r > BOTTOM_WALL_Y) {
@@ -474,30 +502,12 @@ function drawFlipper(f) {
   ctx.stroke();
 }
 
-function drawBumper(b) {
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
-  ctx.fillStyle = "rgba(255,255,255,0.10)";
-  ctx.fill();
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = "rgba(255,255,255,0.25)";
-  ctx.stroke();
-  ctx.restore();
-}
-
 function draw() {
   resizeCanvas();
   ctx.setTransform(scaleX, 0, 0, scaleY, 0, 0);
   ctx.clearRect(0, 0, WORLD_W, WORLD_H);
 
   if (bgReady) ctx.drawImage(BG, 0, 0, WORLD_W, WORLD_H);
-
-  // bumpers (light overlay so you can see hit areas while testing)
-  for (const b of bumpers) drawBumper(b);
-
-  drawFlipper(flippers.left);
-  drawFlipper(flippers.right);
 
   // Puck
   ctx.beginPath();
@@ -509,13 +519,29 @@ function draw() {
   ctx.stroke();
 
   // HUD
-  ctx.fillStyle = "rgba(255,255,255,0.85)";
+  ctx.fillStyle = "rgba(255,255,255,0.90)";
   ctx.font = "16px system-ui, sans-serif";
   ctx.fillText(`Score: ${score}`, 16, 28);
+  ctx.fillText(`x${mult}`, 16, 50);
 
+  // Optional tiny hit flashes (debug-ish but fun)
+  if (flashBank) {
+    ctx.fillStyle = "rgba(255,120,80,0.25)";
+    ctx.beginPath(); ctx.arc(targets.bank.x, targets.bank.y, targets.bank.r + 8, 0, Math.PI * 2); ctx.fill();
+  }
+  if (flashMult) {
+    ctx.fillStyle = "rgba(255,120,80,0.25)";
+    ctx.beginPath(); ctx.arc(targets.multiplier.x, targets.multiplier.y, targets.multiplier.r + 8, 0, Math.PI * 2); ctx.fill();
+  }
+  if (flashGoal) {
+    ctx.fillStyle = "rgba(80,200,255,0.18)";
+    ctx.fillRect(goalZone.x1, goalZone.y1, goalZone.x2 - goalZone.x1, goalZone.y2 - goalZone.y1);
+  }
+
+  // Hint
   ctx.fillStyle = "rgba(255,255,255,0.35)";
   ctx.font = "12px system-ui, sans-serif";
-  ctx.fillText("Space or swipe down to serve", 16, WORLD_H - 18);
+  ctx.fillText("Space or swipe down to serve | Swipe L/R to tilt | A/L flippers", 16, WORLD_H - 18);
 
   ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
