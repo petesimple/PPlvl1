@@ -422,10 +422,10 @@ function handleGoalZone() {
 // NEON HUD
 // =====================
 function drawNeonScoreHUD() {
-  const x = 12;
-  const y = 12;
-  const w = 196;
-  const h = 66;
+  const w = 260;     // wider looks better in the header
+const h = 72;
+const x = (WORLD_W - w) / 2; // centered
+const y = 32;      // sits in the "PLAY PUCK" header panel zone
   const r = 14;
   const pad = 12;
 
